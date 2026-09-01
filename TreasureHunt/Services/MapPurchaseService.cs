@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using ECommons.GameFunctions;
@@ -145,7 +146,6 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            // 检查交易板是否已打开
             if (IsMarketBoardOpen())
             {
                 OnLog?.Invoke("交易板已打开");
@@ -154,23 +154,94 @@ public class MapPurchaseService : IDisposable
 
             // 查找最近的交易板
             var mbObj = FindNearestMarketBoard();
+
+            // 没找到交易板 → 自动传送到主城再重试
             if (mbObj == null)
             {
-                OnLog?.Invoke("当前区域未找到交易板，请前往主城使用");
-                OnLog?.Invoke("提示：如在主城仍找不到，请使用 /thunt debug 查看附近对象列表");
-                return false;
+                OnLog?.Invoke("当前区域无交易板，尝试传送到主城...");
+
+                // 主城水晶 ID（三大主城的市场区域水晶）
+                var cityAetherytes = GetMainCityAetherytes();
+                var unlocked = AetheryteHelper.GetUnlockedAetherytes();
+
+                uint teleportTarget = 0;
+                string cityName = "";
+                foreach (var (aethId, terrId, name) in cityAetherytes)
+                {
+                    foreach (var (uId, uTerr, uCost) in unlocked)
+                    {
+                        if (uId == aethId)
+                        {
+                            teleportTarget = aethId;
+                            cityName = name;
+                            break;
+                        }
+                    }
+                    if (teleportTarget != 0) break;
+                }
+
+                if (teleportTarget == 0)
+                {
+                    OnLog?.Invoke("未找到已解锁的主城水晶，请手动前往主城");
+                    return false;
+                }
+
+                // 检查是否已在目标主城
+                var currentTerr = Plugin.ClientState.TerritoryType;
+                if (currentTerr == GetTerritoryForAetheryte(teleportTarget))
+                {
+                    OnLog?.Invoke($"已在 {cityName}，但未找到交易板，请使用 /thunt debug 查看附近对象");
+                    return false;
+                }
+
+                OnLog?.Invoke($"传送至 {cityName}...");
+                if (!AetheryteHelper.TeleportToAetheryte(teleportTarget))
+                {
+                    OnLog?.Invoke("传送失败");
+                    return false;
+                }
+
+                // 等待传送完成
+                var waitStart = DateTime.Now;
+                while ((DateTime.Now - waitStart).TotalSeconds < 30)
+                {
+                    token.ThrowIfCancellationRequested();
+                    await Task.Delay(500, token);
+                    // 检查是否在加载中（传送后会出现加载画面）
+                    if (Plugin.Condition[ConditionFlag.BetweenAreas] ||
+                        Plugin.Condition[ConditionFlag.BetweenAreas51])
+                    {
+                        continue;
+                    }
+                    // 检查是否传送完成（玩家重新出现）
+                    var player = Plugin.ObjectTable.LocalPlayer;
+                    if (player != null && !Plugin.Condition[ConditionFlag.BetweenAreas])
+                    {
+                        break;
+                    }
+                }
+
+                // 额外等待 2 秒让场景加载完毕
+                await Task.Delay(2000, token);
+
+                // 重新查找交易板
+                mbObj = FindNearestMarketBoard();
+                if (mbObj == null)
+                {
+                    OnLog?.Invoke($"到达 {cityName} 后仍未找到交易板，请使用 /thunt debug 查看附近对象");
+                    return false;
+                }
+                OnLog?.Invoke($"到达 {cityName}，已找到交易板");
             }
 
-            OnLog?.Invoke($"找到交易板: {mbObj.Name} (距离 {Vector3.Distance(Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero, mbObj.Position):F1}m)");
-
-            var player = Plugin.ObjectTable.LocalPlayer;
-            if (player == null)
+            var player2 = Plugin.ObjectTable.LocalPlayer;
+            if (player2 == null)
             {
                 OnLog?.Invoke("无法获取玩家位置");
                 return false;
             }
 
-            var distance = Vector3.Distance(player.Position, mbObj.Position);
+            var distance = Vector3.Distance(player2.Position, mbObj.Position);
 
             // 如果距离较远，用 vnavmesh 寻路
             if (distance > 3.5f)
@@ -183,8 +254,6 @@ public class MapPurchaseService : IDisposable
 
                 OnLog?.Invoke($"距离 {distance:F1}m，开始自动寻路...");
 
-                // 使用新的 MoveToAsync（参考 AutoDuty 实现）
-                // 容差设为 2.5 米，确保在交互范围内
                 var arrived = await VnavmeshHelper.MoveToAsync(
                     mbObj.Position,
                     tolerance: 2.5f,
@@ -212,8 +281,8 @@ public class MapPurchaseService : IDisposable
             }
 
             // 等待交易板窗口出现
-            var waitStart = DateTime.Now;
-            while ((DateTime.Now - waitStart).TotalSeconds < 5)
+            var waitStart2 = DateTime.Now;
+            while ((DateTime.Now - waitStart2).TotalSeconds < 5)
             {
                 token.ThrowIfCancellationRequested();
                 if (IsMarketBoardOpen())
@@ -239,6 +308,37 @@ public class MapPurchaseService : IDisposable
             Plugin.Log.Error($"打开交易板异常: {ex}");
             return false;
         }
+    }
+
+    // 主城水晶列表（水晶ID, 领土ID, 名称）
+    private static readonly (uint aetheryteId, uint territoryId, string name)[] MainCityAetherytes =
+    {
+        // 利姆萨·罗敏萨
+        (2, 129, "利姆萨·罗敏萨"),    // Limsa Lominsa Lower Decks
+        (8, 128, "利姆萨上层"),       // Limsa Upper Decks
+        // 格里达尼亚
+        (9, 132, "格里达尼亚"),       // Old Gridania
+        (66, 133, "新格里达尼亚"),    // New Gridania
+        // 乌尔达哈
+        (1, 131, "乌尔达哈"),         // Ul'dah Steps of Nald
+        (12, 130, "乌尔达哈商业区"),  // Ul'dah Steps of Thal
+        // 基础：神拳都、白银乡等
+        (419, 478, "黄金港"),         // Kugane
+        (419, 814, "水晶都"),         // Crystarium
+    };
+
+    private static (uint aetheryteId, uint territoryId, string name)[] GetMainCityAetherytes()
+    {
+        return MainCityAetherytes;
+    }
+
+    private static uint GetTerritoryForAetheryte(uint aetheryteId)
+    {
+        foreach (var (id, terrId, _) in MainCityAetherytes)
+        {
+            if (id == aetheryteId) return terrId;
+        }
+        return 0;
     }
 
     // 市场布告板 DataId 列表（已知的市场布告板/召唤铃 DataId）
