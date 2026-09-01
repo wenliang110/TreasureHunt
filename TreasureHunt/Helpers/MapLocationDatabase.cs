@@ -69,7 +69,31 @@ public static class MapLocationDatabase
             : entry.NearestAetheryteName;
         if (string.IsNullOrEmpty(name)) return 0;
 
-        return LookupAetheryteIdByName(name);
+        // 优先从 Excel 表精确查找
+        var id = LookupAetheryteIdByName(name);
+        if (id != 0) return id;
+
+        // 回退：从已解锁传送列表按名称关键词匹配（同领土内）
+        try
+        {
+            var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
+            // 先按名称匹配
+            foreach (var a in unlocked)
+            {
+                if (a.name.Contains(name, StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains(a.name, StringComparison.OrdinalIgnoreCase))
+                {
+                    Plugin.Log.Debug($"ResolveAetheryteId: 已解锁列表匹配 -> {a.name} (ID={a.aetheryteId})");
+                    return a.aetheryteId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"ResolveAetheryteId 回退失败: {ex.Message}");
+        }
+
+        return 0;
     }
 
     /// <summary>

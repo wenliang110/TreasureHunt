@@ -26,3 +26,7 @@ Thumbs.db
 *.nupkg
 packages.lock.json
 build_test/
+build_test2/
+build_test3/
+build_test4/
+build_test*/
