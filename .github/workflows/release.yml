@@ -1,0 +1,68 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build plugin
+      run: dotnet build TreasureHunt/TreasureHunt.csproj -c Release -o ./output
+
+    - name: Create release zip
+      shell: pwsh
+      run: |
+        $zipPath = "TreasureHunt.zip"
+        Compress-Archive -Path "./output/TreasureHunt.dll","./output/Data" -DestinationPath $zipPath
+        Write-Host "Created $zipPath"
+
+    - name: Extract version from tag
+      id: version
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        if ($tag -eq "") { $tag = "v0.0.0.0" }
+        $version = $tag.TrimStart('v')
+        Write-Host "Version: $version"
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.TAG }}
+        name: TreasureHunt ${{ steps.version.outputs.TAG }}
+        body: |
+          ## TreasureHunt ${{ steps.version.outputs.TAG }}
+
+          ### 安装方式
+          1. 在 XIVLauncher 设置中添加自定义仓库：
+             `https://raw.githubusercontent.com/wenliang110/TreasureHunt/main/repo.json`
+          2. 在插件管理器中搜索 TreasureHunt 并安装
+          3. 游戏内输入 `/th` 打开主窗口
+
+          ### 功能
+          - 自动购买藏宝图 (交易板)
+          - 自动解读藏宝图并标记位置
+          - 自动传送到最近水晶
+          - 自动导航到挖宝点
+          - 自动挖掘
+          - 进洞自动交互
+          - TP 钱袋子奖励房自动收集
+        files: |
+          TreasureHunt.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
