@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ECommons.Automation;
@@ -17,10 +20,10 @@ namespace TreasureHunt.Helpers;
 /// 插件命令参考：
 /// /pdr market &lt;物品ID/物品名称&gt; - 开关市场布告板
 /// 
-/// 购买原理：
-/// PDR 使用 ImGui 自定义界面，但底层仍然使用游戏的 ItemSearch 系统。
-/// 我们通过 InfoProxyItemSearch 直接读取搜索结果并调用 SendPurchaseRequestPacket() 完成购买，
-/// 无需操作 UI 节点。
+/// 购买方式：
+/// 1. 优先通过 InfoProxyItemSearch 底层 API 直接购买（无需操作 UI）
+/// 2. 失败则回退到鼠标模拟：Shift + 右键点击 PDR 窗口第一个列表项
+///    （PDR 是 ImGui 窗口，不走原生购买流程，需模拟鼠标操作）
 /// </summary>
 public static class PdrMarketHelper
 {
@@ -35,6 +38,13 @@ public static class PdrMarketHelper
         "PDRMarket",
         "BetterMarket",
     };
+
+    // 鼠标点击偏移配置（相对于游戏窗口的百分比）
+    // PDR 窗口默认在屏幕右侧，第一个列表项大约在：
+    //   X: 60% 处（窗口右半部分的价格列）
+    //   Y: 42% 处（跳过标题/搜索/物品信息/标签/统计/表头后第一个列表项）
+    public static float MouseClickXPercent = 0.60f;
+    public static float MouseClickYPercent = 0.42f;
 
     /// <summary>
     /// 打开远程交易板并搜索指定物品（通过 /pdr market 命令）
@@ -312,6 +322,150 @@ public static class PdrMarketHelper
         }
     }
 
+    // ========== 以下是鼠标模拟购买 API（用于 PDR ImGui 窗口）==========
+
+    #region Windows API 声明
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint cButtons, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+    private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+    private const byte VK_SHIFT = 0x10;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    #endregion
+
+    /// <summary>
+    /// 获取游戏窗口的位置和大小
+    /// </summary>
+    private static bool GetGameWindowRect(out RECT rect)
+    {
+        rect = default;
+        try
+        {
+            var process = Process.GetCurrentProcess();
+            var hWnd = process.MainWindowHandle;
+            if (hWnd == IntPtr.Zero) return false;
+            return GetWindowRect(hWnd, out rect);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"获取游戏窗口位置失败: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 计算 PDR 第一个列表项的点击屏幕坐标
+    /// 基于游戏窗口大小 + 偏移百分比估算
+    /// </summary>
+    public static (int x, int y, bool success) CalculateClickPosition()
+    {
+        if (!GetGameWindowRect(out var gameRect))
+            return (0, 0, false);
+
+        int gameWidth = gameRect.Right - gameRect.Left;
+        int gameHeight = gameRect.Bottom - gameRect.Top;
+
+        int clickX = gameRect.Left + (int)(gameWidth * MouseClickXPercent);
+        int clickY = gameRect.Top + (int)(gameHeight * MouseClickYPercent);
+
+        return (clickX, clickY, true);
+    }
+
+    /// <summary>
+    /// 通过模拟鼠标 Shift + 右键点击购买 PDR 窗口中的第一个列表项
+    /// 
+    /// PDR 窗口结构（从顶部往下，相对于游戏窗口）：
+    /// - 标题栏 + 搜索栏 + 物品信息区 + 标签栏 + 统计行 + 列表表头 ≈ 窗口高度的 35-40%
+    /// - 第一个列表项价格列 ≈ 窗口宽度的 55-65%
+    /// 
+    /// 可通过调整 MouseClickXPercent 和 MouseClickYPercent 来微调点击位置
+    /// </summary>
+    public static bool PurchaseFirstListingByMouse()
+    {
+        try
+        {
+            var (clickX, clickY, success) = CalculateClickPosition();
+            if (!success)
+            {
+                Plugin.Log.Error("鼠标购买失败: 无法获取游戏窗口位置");
+                return false;
+            }
+
+            // 执行 Shift + 右键点击
+            Plugin.Log.Info($"模拟 Shift+右键点击购买，位置: ({clickX}, {clickY}) (相对于屏幕)");
+            Plugin.Log.Info($"偏移参数: X={MouseClickXPercent:F2}, Y={MouseClickYPercent:F2}");
+
+            // 1. 移动鼠标
+            SetCursorPos(clickX, clickY);
+            Thread.Sleep(150);
+
+            // 2. 按下 Shift
+            keybd_event(VK_SHIFT, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(80);
+
+            // 3. 按下右键
+            mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(120);
+
+            // 4. 松开右键
+            mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(80);
+
+            // 5. 松开 Shift
+            keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+            Plugin.Log.Info("Shift+右键点击购买已发送");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"鼠标模拟购买异常: {ex}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 测试：只移动鼠标到点击位置，不点击（用于调试位置是否正确）
+    /// </summary>
+    public static bool TestMoveMouseToClickPosition()
+    {
+        try
+        {
+            var (clickX, clickY, success) = CalculateClickPosition();
+            if (!success) return false;
+
+            Plugin.Log.Info($"测试：移动鼠标到点击位置 ({clickX}, {clickY})");
+            SetCursorPos(clickX, clickY);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"测试鼠标位置失败: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>
     /// 调试：获取 PDR 市场状态的详细信息
     /// </summary>
@@ -323,6 +477,19 @@ public static class PdrMarketHelper
             var proxy = GetInfoProxyItemSearch();
 
             var info = new List<string>();
+            info.Add($"=== PDR 市场检测 ===");
+            info.Add($"原生市场窗口: {(IsMarketOpen() ? GetMarketAddonName() : "未检测到(PDR是ImGui窗口，正常)")}");
+
+            // 鼠标模拟配置
+            var (cx, cy, cok) = CalculateClickPosition();
+            if (cok)
+            {
+                info.Add($"鼠标点击位置: ({cx}, {cy})");
+                info.Add($"  X偏移: {MouseClickXPercent:F2}, Y偏移: {MouseClickYPercent:F2}");
+            }
+
+            info.Add($"---");
+            info.Add($"[底层 API 状态]");
             info.Add($"AgentItemSearch: {(agent != null ? "存在" : "空")}");
             if (agent != null)
             {
@@ -344,6 +511,11 @@ public static class PdrMarketHelper
                     info.Add($"  第一个 listing: ItemId={first->ItemId} Price={first->UnitPrice} Qty={first->Quantity}");
                 }
             }
+
+            info.Add($"---");
+            info.Add($"用法: 先用 /pdr market <物品ID> 打开市场");
+            info.Add($"再用 /thunt ui 查看底层数据是否加载");
+            info.Add($"鼠标购买位置不对？调整 PdrMarketHelper.MouseClickX/YPercent");
 
             return string.Join("\n", info);
         }
