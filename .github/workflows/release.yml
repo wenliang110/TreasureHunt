@@ -36,12 +36,13 @@ jobs:
     - name: Cleanup output
       shell: pwsh
       run: |
-        Get-ChildItem ./build/* -Exclude TreasureHunt.* | Remove-Item -Force -Recurse
+        Remove-Item ./build/*.pdb -Force -ErrorAction SilentlyContinue
+        Remove-Item ./build/TreasureHunt -Recurse -Force -ErrorAction SilentlyContinue
 
     - name: Create plugin zip
       shell: pwsh
       run: |
-        Compress-Archive -Path ./build/TreasureHunt.* -DestinationPath TreasureHunt.zip
+        Compress-Archive -Path ./build/* -DestinationPath TreasureHunt.zip
 
     - name: Extract version from tag
       id: version
