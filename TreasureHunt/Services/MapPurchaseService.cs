@@ -88,49 +88,53 @@ public class MapPurchaseService : IDisposable
             State = PurchaseState.OpeningMarketBoard;
 
             // 优先使用 PDR 远程交易板（无需跑到主城）
-            // 不检测程序集，直接试命令，打不开就回退
             var usePdr = _plugin.Configuration.UsePdrMarket;
             OnLog?.Invoke($"PDR 模式: 配置启用={usePdr}，将尝试 /pdr market 命令");
 
             if (usePdr)
             {
                 OnLog?.Invoke("使用 PDR 远程交易板购买...");
-                if (!await OpenMarketBoardPdr(token))
+                var pdrResult = await PurchaseMapViaPdr(token);
+                if (pdrResult.Success)
                 {
-                    OnLog?.Invoke("PDR 打开失败，回退到传统方式...");
-                    usePdr = false;
+                    return pdrResult;
                 }
+                OnLog?.Invoke($"PDR 购买失败: {pdrResult.ErrorMessage}，回退到传统方式...");
+                usePdr = false;
             }
 
+            // 传统方式：原生交易板 UI 操作
             if (!usePdr)
             {
                 if (!await OpenMarketBoard(token))
                     return new PurchaseResult { Success = false, ErrorMessage = "无法打开交易板" };
+
+                await WaitAndSetState(PurchaseState.SearchingItem, token);
+                if (!await SearchForMap(token))
+                    return new PurchaseResult { Success = false, ErrorMessage = "搜索藏宝图失败" };
+
+                await WaitAndSetState(PurchaseState.SelectingResult, token);
+                if (!await SelectSearchResult(token))
+                    return new PurchaseResult { Success = false, ErrorMessage = "选择搜索结果失败" };
+
+                await WaitAndSetState(PurchaseState.CheckingPrice, token);
+                var (valid, price) = await CheckPrice(token);
+                if (!valid)
+                    return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
+
+                await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
+                if (!await ConfirmPurchase(token))
+                    return new PurchaseResult { Success = false, ErrorMessage = "确认购买失败" };
+
+                await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
+                await Task.Delay(2000, token);
+
+                State = PurchaseState.Done;
+                OnLog?.Invoke($"购买完成，价格: {price}");
+                return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
             }
 
-            await WaitAndSetState(PurchaseState.SearchingItem, token);
-            if (!await SearchForMap(token))
-                return new PurchaseResult { Success = false, ErrorMessage = "搜索藏宝图失败" };
-
-            await WaitAndSetState(PurchaseState.SelectingResult, token);
-            if (!await SelectSearchResult(token))
-                return new PurchaseResult { Success = false, ErrorMessage = "选择搜索结果失败" };
-
-            await WaitAndSetState(PurchaseState.CheckingPrice, token);
-            var (valid, price) = await CheckPrice(token);
-            if (!valid)
-                return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
-
-            await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
-            if (!await ConfirmPurchase(token))
-                return new PurchaseResult { Success = false, ErrorMessage = "确认购买失败" };
-
-            await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
-            await Task.Delay(2000, token);
-
-            State = PurchaseState.Done;
-            OnLog?.Invoke($"购买完成，价格: {price}");
-            return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
+            return new PurchaseResult { Success = false, ErrorMessage = "未知错误" };
         }
         catch (OperationCanceledException)
         {
@@ -150,6 +154,95 @@ public class MapPurchaseService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 通过 PDR + InfoProxyItemSearch 直接购买（无需操作原生 UI）
+    /// PDR 打开 ImGui 窗口并搜索物品后，我们直接通过底层 API 读取列表并购买
+    /// </summary>
+    private async Task<PurchaseResult> PurchaseMapViaPdr(CancellationToken token)
+    {
+        try
+        {
+            var itemId = _plugin.Configuration.TreasureMapItemId;
+            var maxPrice = _plugin.Configuration.MaxPurchasePrice;
+
+            // 1. 打开 PDR 市场并搜索物品
+            OnLog?.Invoke($"执行 /pdr market {itemId} ...");
+            PdrMarketHelper.OpenMarket(itemId);
+
+            // 2. 等待搜索结果加载（PDR 建立连接 + 获取列表数据）
+            State = PurchaseState.SearchingItem;
+            OnLog?.Invoke("等待 PDR 搜索结果加载...");
+
+            var debugInfoBefore = PdrMarketHelper.GetDebugInfo();
+            Plugin.Log.Debug($"PDR 打开前状态:\n{debugInfoBefore}");
+
+            var resultsLoaded = await PdrMarketHelper.WaitForSearchResults(12000, token);
+
+            var debugInfoAfter = PdrMarketHelper.GetDebugInfo();
+            Plugin.Log.Debug($"PDR 等待后状态:\n{debugInfoAfter}");
+
+            if (!resultsLoaded)
+            {
+                var count = PdrMarketHelper.GetListingCount();
+                OnLog?.Invoke($"搜索结果加载超时，当前列表数: {count}");
+                OnLog?.Invoke("可能原因：PDR 未正确连接市场，或物品名称/ID有误");
+                return new PurchaseResult { Success = false, ErrorMessage = "搜索结果加载超时" };
+            }
+
+            var listingCount = PdrMarketHelper.GetListingCount();
+            OnLog?.Invoke($"搜索完成，找到 {listingCount} 个结果");
+
+            // 3. 检查价格
+            State = PurchaseState.CheckingPrice;
+            var (price, quantity, resultItemId, isValid) = PdrMarketHelper.GetFirstListing();
+
+            if (!isValid)
+            {
+                OnLog?.Invoke("无法获取第一个商品信息");
+                return new PurchaseResult { Success = false, ErrorMessage = "无法获取商品信息" };
+            }
+
+            OnLog?.Invoke($"当前最低价格: {price} (数量: {quantity})");
+
+            if (price > maxPrice)
+            {
+                OnLog?.Invoke($"价格超出上限: {price} > {maxPrice}");
+                return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {maxPrice})" };
+            }
+
+            // 4. 直接购买（通过 InfoProxyItemSearch API）
+            State = PurchaseState.ConfirmingPurchase;
+            OnLog?.Invoke($"正在购买，价格: {price} ...");
+
+            bool purchaseOk = PdrMarketHelper.PurchaseFirstListing((uint)maxPrice);
+
+            if (!purchaseOk)
+            {
+                OnLog?.Invoke("购买请求发送失败");
+                return new PurchaseResult { Success = false, ErrorMessage = "购买请求发送失败" };
+            }
+
+            // 5. 等待购买完成
+            State = PurchaseState.WaitingForPurchase;
+            OnLog?.Invoke("购买请求已发送，等待交易完成...");
+            await Task.Delay(2500, token);
+
+            State = PurchaseState.Done;
+            OnLog?.Invoke($"购买完成，价格: {price}");
+            return new PurchaseResult { Success = true, ItemId = resultItemId, Price = (int)price };
+        }
+        catch (OperationCanceledException)
+        {
+            return new PurchaseResult { Success = false, ErrorMessage = "已取消" };
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"PDR 购买异常: {ex.Message}");
+            Plugin.Log.Error($"PDR 购买异常: {ex}");
+            return new PurchaseResult { Success = false, ErrorMessage = ex.Message };
+        }
+    }
+
     public void Cancel()
     {
         _cts?.Cancel();
@@ -159,7 +252,8 @@ public class MapPurchaseService : IDisposable
     /// <summary>
     /// 使用 PDR (更好的市场布告板) 打开远程交易板
     /// 通过 /pdr market &lt;物品ID&gt; 直接打开，无需跑到主城
-    /// 打开失败返回 false，调用方负责回退到传统方式
+    /// PDR 是 ImGui 窗口，检测不到原生 ItemSearch addon
+    /// 但 PDR 可能已激活了 ItemSearch Agent，我们尝试用原生 API 购买
     /// </summary>
     private async Task<bool> OpenMarketBoardPdr(CancellationToken token)
     {
@@ -176,21 +270,24 @@ public class MapPurchaseService : IDisposable
 
             PdrMarketHelper.OpenMarket(itemId);
 
-            // 等待交易板窗口出现（PDR 可能复用 ItemSearch，也可能用自定义窗口名）
-            var waitStart = DateTime.Now;
-            while ((DateTime.Now - waitStart).TotalSeconds < 8)
+            // 等待 PDR 加载（PDR是ImGui窗口，等它建立市场连接）
+            await Task.Delay(2000, token);
+
+            // 尝试激活原生 ItemSearch Agent
+            // PDR 建立远程连接后，ItemSearch Agent 应该可以工作了
+            OnLog?.Invoke("尝试激活原生 ItemSearch Agent...");
+            OpenItemSearchAgent();
+            await Task.Delay(1500, token);
+
+            if (IsMarketBoardOpen())
             {
-                token.ThrowIfCancellationRequested();
-                if (PdrMarketHelper.IsMarketOpen() || IsMarketBoardOpen())
-                {
-                    OnLog?.Invoke("PDR 交易板已打开");
-                    return true;
-                }
-                await Task.Delay(300, token);
+                OnLog?.Invoke("原生交易板已打开（PDR 远程连接已建立）");
+                return true;
             }
 
-            OnLog?.Invoke("PDR 交易板未打开（可能未安装插件），将回退到传统方式");
-            return false;
+            // 如果原生窗口没打开，但 Agent 可能已激活，还是可以继续尝试搜索购买
+            OnLog?.Invoke("原生窗口未显示，但继续尝试使用 ItemSearch Agent");
+            return true; // 继续，后续步骤尝试直接用 Agent API
         }
         catch (OperationCanceledException)
         {
