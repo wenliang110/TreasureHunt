@@ -5,6 +5,7 @@ using System.Numerics;
 using Dalamud.Game.ClientState.Objects;
 using Dalamud.Game.ClientState.Objects.Types;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 
 namespace TreasureHunt.Helpers;
@@ -13,7 +14,7 @@ public static unsafe class GameObjectHelper
 {
     public static IGameObject? FindNearestObjectByDataId(uint dataId, Vector3? fromPosition = null)
     {
-        var pos = fromPosition ?? Plugin.ClientState.LocalPlayer?.Position ?? Vector3.Zero;
+        var pos = fromPosition ?? Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         IGameObject? nearest = null;
         var minDist = float.MaxValue;
 
@@ -34,7 +35,7 @@ public static unsafe class GameObjectHelper
 
     public static IGameObject? FindNearestObjectByName(string name, Vector3? fromPosition = null)
     {
-        var pos = fromPosition ?? Plugin.ClientState.LocalPlayer?.Position ?? Vector3.Zero;
+        var pos = fromPosition ?? Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         IGameObject? nearest = null;
         var minDist = float.MaxValue;
 
@@ -109,7 +110,7 @@ public static unsafe class GameObjectHelper
 
     public static bool IsInInteractRange(IGameObject obj, float maxDistance = 3.0f)
     {
-        var player = Plugin.ClientState.LocalPlayer;
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return false;
         return Vector3.Distance(player.Position, obj.Position) <= maxDistance;
     }

@@ -136,11 +136,14 @@ public class TreasureCofferService : IDisposable
         {
             // 使用挖掘技能
             // 需要通过 MapDecipherService 执行
-            var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
-            if (actionManager == null) return false;
+            unsafe
+            {
+                var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
+                if (actionManager == null) return false;
 
-            actionManager->UseAction(
-                FFXIVClientStructs.FFXIV.Client.Game.ActionType.General, 12898); // Dig
+                actionManager->UseAction(
+                    FFXIVClientStructs.FFXIV.Client.Game.ActionType.GeneralAction, 12898); // Dig
+            }
 
             OnLog?.Invoke("执行挖掘");
             await Task.Delay(500, token);
@@ -237,7 +240,7 @@ public class TreasureCofferService : IDisposable
         {
             token.ThrowIfCancellationRequested();
 
-            var player = _plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null)
             {
                 await Task.Delay(500, token);
@@ -245,7 +248,7 @@ public class TreasureCofferService : IDisposable
             }
 
             // 检查战斗状态
-            var currentInCombat = _plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+            var currentInCombat = Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
             if (currentInCombat)
             {
                 if (!inCombat)

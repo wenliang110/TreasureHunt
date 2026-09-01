@@ -12,7 +12,7 @@ public static unsafe class AetheryteHelper
 {
     public static List<(uint aetheryteId, string name, Vector3 position)> GetNearbyAetherytes(Vector3 targetPos)
     {
-        var result = new List<(uint, string, Vector3)>();
+        var result = new List<(uint aetheryteId, string name, Vector3 position)>();
 
         foreach (var obj in Plugin.ObjectTable)
         {

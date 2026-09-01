@@ -58,7 +58,7 @@ public class NavigationService : IDisposable
 
         try
         {
-            var player = _plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null)
                 return new NavigationResult { Success = false, ErrorMessage = "角色不存在" };
 
@@ -191,7 +191,7 @@ public class NavigationService : IDisposable
         }
 
         // 等待角色完全加载
-        while (_plugin.ClientState.LocalPlayer == null && (DateTime.Now - startTime) < timeout)
+        while (Plugin.ObjectTable.LocalPlayer == null && (DateTime.Now - startTime) < timeout)
         {
             await Task.Delay(200, token);
         }
@@ -258,7 +258,7 @@ public class NavigationService : IDisposable
         try
         {
             // 通过 FFXIVClientStructs 修改玩家位置
-            var player = _plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null) return false;
 
             // 这里需要使用 unsafe 代码修改游戏内部位置

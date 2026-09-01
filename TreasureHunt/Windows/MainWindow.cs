@@ -87,12 +87,24 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
 
         // 功能开关 (与参考图顺序一致)
-        DrawCheckbox("不选中他人宝箱怪", ref config.AvoidOthersTreasureMonsters);
-        DrawCheckbox("解读后标记位置", ref config.EnableMarkLocation);
-        DrawCheckbox("一键买图解读", ref config.EnableOneClickBuyDecipher);
-        DrawCheckbox("无限挖掘", ref config.EnableUnlimitedDigging);
-        DrawCheckbox("自动传送", ref config.EnableAutoTeleport);
-        DrawCheckbox("TP 钱袋", ref config.EnableMoneyBagCollection);
+        var avoidOthers = config.AvoidOthersTreasureMonsters;
+        DrawCheckbox("不选中他人宝箱怪", ref avoidOthers);
+        config.AvoidOthersTreasureMonsters = avoidOthers;
+        var markLocation = config.EnableMarkLocation;
+        DrawCheckbox("解读后标记位置", ref markLocation);
+        config.EnableMarkLocation = markLocation;
+        var oneClickBuyDecipher = config.EnableOneClickBuyDecipher;
+        DrawCheckbox("一键买图解读", ref oneClickBuyDecipher);
+        config.EnableOneClickBuyDecipher = oneClickBuyDecipher;
+        var unlimitedDigging = config.EnableUnlimitedDigging;
+        DrawCheckbox("无限挖掘", ref unlimitedDigging);
+        config.EnableUnlimitedDigging = unlimitedDigging;
+        var autoTeleport = config.EnableAutoTeleport;
+        DrawCheckbox("自动传送", ref autoTeleport);
+        config.EnableAutoTeleport = autoTeleport;
+        var moneyBagCollection = config.EnableMoneyBagCollection;
+        DrawCheckbox("TP 钱袋", ref moneyBagCollection);
+        config.EnableMoneyBagCollection = moneyBagCollection;
 
         // TP 钱袋子状态
         if (config.EnableMoneyBagCollection)
@@ -106,7 +118,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
 
         // 输入框: 价格限制 + 藏宝图ID (匹配参考图)
-        ImGui.Columns(2, null, false);
+        ImGui.Columns(2, string.Empty, false);
         var priceVal = (int)config.MaxPurchasePrice;
         ImGui.Text("价格限制:");
         ImGui.SameLine();
@@ -130,7 +142,9 @@ public class MainWindow : Window, IDisposable
         ImGui.Columns(1);
 
         ImGui.Spacing();
-        DrawCheckbox("全自动模式", ref config.EnableFullAutoMode);
+        var fullAutoMode = config.EnableFullAutoMode;
+        DrawCheckbox("全自动模式", ref fullAutoMode);
+        config.EnableFullAutoMode = fullAutoMode;
     }
 
     private void DrawCheckbox(string label, ref bool value)
@@ -150,7 +164,7 @@ public class MainWindow : Window, IDisposable
         // 开始/停止按钮 (并排，匹配参考图)
         if (!isRunning)
         {
-            ImGui.Columns(2, null, false);
+            ImGui.Columns(2, string.Empty, false);
             if (ImGui.Button("开始", new Vector2(-1, 32)))
             {
                 _logLines.Clear();
@@ -168,7 +182,7 @@ public class MainWindow : Window, IDisposable
             ImGui.Spacing();
 
             // 单独功能按钮
-            ImGui.Columns(3, null, false);
+            ImGui.Columns(3, string.Empty, false);
             if (ImGui.Button("买图", new Vector2(-1, 25)))
             {
                 _ = _plugin.MapPurchaseService.PurchaseMapAsync();
@@ -196,7 +210,7 @@ public class MainWindow : Window, IDisposable
         }
         else
         {
-            ImGui.Columns(2, null, false);
+            ImGui.Columns(2, string.Empty, false);
             ImGui.BeginDisabled();
             ImGui.Button("开始", new Vector2(-1, 32));
             ImGui.EndDisabled();

@@ -189,7 +189,7 @@ public class PortalDungeonService : IDisposable
         {
             token.ThrowIfCancellationRequested();
 
-            var inCombatNow = _plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
+            var inCombatNow = Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
             if (inCombatNow && !inCombat)
             {
                 inCombat = true;
@@ -254,8 +254,8 @@ public class PortalDungeonService : IDisposable
 
             // 检查是否有 roll 点窗口
             // 如果没有 roll 窗口，说明 roll 点已完成
-            var hasRollWindow = _plugin.GameGui.GetAddonByName("NeedGreed") != null ||
-                                _plugin.GameGui.GetAddonByName("Loot") != null;
+            var hasRollWindow = Plugin.GameGui.GetAddonByName("NeedGreed") != null ||
+                                Plugin.GameGui.GetAddonByName("Loot") != null;
 
             if (!hasRollWindow && (DateTime.Now - startTime).TotalSeconds > 3)
             {

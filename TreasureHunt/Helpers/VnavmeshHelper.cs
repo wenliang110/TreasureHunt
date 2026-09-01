@@ -32,7 +32,7 @@ public static class VnavmeshHelper
     {
         try
         {
-            var player = Plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null) return false;
 
             var sub = Plugin.PluginInterface.GetIpcSubscriber<Vector3, Vector3, bool>(
@@ -79,7 +79,7 @@ public static class VnavmeshHelper
     {
         try
         {
-            var player = Plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null) return false;
 
             var sub = Plugin.PluginInterface.GetIpcSubscriber<Vector3, Vector3, bool>(
@@ -95,7 +95,7 @@ public static class VnavmeshHelper
 
     public static bool IsAtDestination(Vector3 destination, float tolerance = 3.0f)
     {
-        var player = Plugin.ClientState.LocalPlayer;
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return false;
         return Vector3.Distance(player.Position, destination) <= tolerance;
     }

@@ -51,13 +51,20 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Text("核心功能开关");
         ImGui.Spacing();
 
-        ImGui.Checkbox("自动购买藏宝图", ref config.EnableAutoPurchase);
-        ImGui.Checkbox("解读后标记位置", ref config.EnableMarkLocation);
-        ImGui.Checkbox("一键买图解读", ref config.EnableOneClickBuyDecipher);
-        ImGui.Checkbox("自动传送", ref config.EnableAutoTeleport);
-        ImGui.Checkbox("TP 钱袋子自动收集", ref config.EnableMoneyBagCollection);
-        ImGui.Checkbox("不选中他人宝箱怪", ref config.AvoidOthersTreasureMonsters);
-        ImGui.Checkbox("全自动模式", ref config.EnableFullAutoMode);
+        var autoPurchase = config.EnableAutoPurchase;
+        if (ImGui.Checkbox("自动购买藏宝图", ref autoPurchase)) config.EnableAutoPurchase = autoPurchase;
+        var markLocation = config.EnableMarkLocation;
+        if (ImGui.Checkbox("解读后标记位置", ref markLocation)) config.EnableMarkLocation = markLocation;
+        var oneClickBuyDecipher = config.EnableOneClickBuyDecipher;
+        if (ImGui.Checkbox("一键买图解读", ref oneClickBuyDecipher)) config.EnableOneClickBuyDecipher = oneClickBuyDecipher;
+        var autoTeleport = config.EnableAutoTeleport;
+        if (ImGui.Checkbox("自动传送", ref autoTeleport)) config.EnableAutoTeleport = autoTeleport;
+        var moneyBagCollection = config.EnableMoneyBagCollection;
+        if (ImGui.Checkbox("TP 钱袋子自动收集", ref moneyBagCollection)) config.EnableMoneyBagCollection = moneyBagCollection;
+        var avoidOthers = config.AvoidOthersTreasureMonsters;
+        if (ImGui.Checkbox("不选中他人宝箱怪", ref avoidOthers)) config.AvoidOthersTreasureMonsters = avoidOthers;
+        var fullAutoMode = config.EnableFullAutoMode;
+        if (ImGui.Checkbox("全自动模式", ref fullAutoMode)) config.EnableFullAutoMode = fullAutoMode;
 
         ImGui.Separator();
         ImGui.Text("交互设置");
@@ -113,7 +120,8 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Text("传送设置");
         ImGui.Spacing();
 
-        ImGui.Checkbox("使用传送网使用券", ref config.UseTeleportTicket);
+        var useTeleportTicket = config.UseTeleportTicket;
+        if (ImGui.Checkbox("使用传送网使用券", ref useTeleportTicket)) config.UseTeleportTicket = useTeleportTicket;
 
         var gilThreshold = config.TeleportGilThreshold;
         if (ImGui.DragInt("传送保留 Gil 下限", ref gilThreshold, 100, 0, 10000000))
@@ -150,7 +158,8 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "金色袋子 = 3倍计数，优先收集");
         ImGui.Spacing();
 
-        ImGui.Checkbox("自动躲避 AOE", ref config.MoneyBagDodgeAoe);
+        var moneyBagDodgeAoe = config.MoneyBagDodgeAoe;
+        if (ImGui.Checkbox("自动躲避 AOE", ref moneyBagDodgeAoe)) config.MoneyBagDodgeAoe = moneyBagDodgeAoe;
 
         var scanInterval = config.MoneyBagScanInterval;
         if (ImGui.DragInt("扫描间隔 (ms)", ref scanInterval, 10, 50, 1000))

@@ -49,10 +49,10 @@ public class MapDecipherService : IDisposable
         var inventory = invManager->GetInventoryContainer(InventoryType.Inventory1);
         for (var i = 0; i < inventory->Size; i++)
         {
-            ref var invItem = ref inventory->GetInventorySlot(i);
-            if (invItem.ItemId == TreasureMapConstants.GargantuaskinItemId)
+            var invItem = inventory->GetInventorySlot(i);
+            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
             {
-                item = invItem;
+                item = *invItem;
                 slot = i;
                 OnLog?.Invoke($"在背包槽位 {i} 找到藏宝图");
                 return true;
@@ -63,10 +63,10 @@ public class MapDecipherService : IDisposable
         var inventory2 = invManager->GetInventoryContainer(InventoryType.Inventory2);
         for (var i = 0; i < inventory2->Size; i++)
         {
-            ref var invItem = ref inventory2->GetInventorySlot(i);
-            if (invItem.ItemId == TreasureMapConstants.GargantuaskinItemId)
+            var invItem = inventory2->GetInventorySlot(i);
+            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
             {
-                item = invItem;
+                item = *invItem;
                 slot = i;
                 OnLog?.Invoke($"在背包2槽位 {i} 找到藏宝图");
                 return true;
@@ -77,10 +77,10 @@ public class MapDecipherService : IDisposable
         var saddlebag = invManager->GetInventoryContainer(InventoryType.SaddleBag1);
         for (var i = 0; i < saddlebag->Size; i++)
         {
-            ref var invItem = ref saddlebag->GetInventorySlot(i);
-            if (invItem.ItemId == TreasureMapConstants.GargantuaskinItemId)
+            var invItem = saddlebag->GetInventorySlot(i);
+            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
             {
-                item = invItem;
+                item = *invItem;
                 slot = i;
                 OnLog?.Invoke($"在鞍囊槽位 {i} 找到藏宝图");
                 return true;
@@ -172,13 +172,13 @@ public class MapDecipherService : IDisposable
         var invManager = InventoryManager.Instance();
         if (invManager == null) return false;
 
-        var eventItems = invManager->GetInventoryContainer(InventoryType.EventItem);
+        var eventItems = invManager->GetInventoryContainer(InventoryType.KeyItems);
         for (var i = 0; i < eventItems->Size; i++)
         {
-            ref var item = ref eventItems->GetInventorySlot(i);
+            var item = eventItems->GetInventorySlot(i);
             // 解读后的地图会变成 event item
             // 需要检查是否是 Gargantuaskin 解读后的 item
-            if (item.ItemId != 0 && item.ItemId != TreasureMapConstants.GargantuaskinItemId)
+            if (item->ItemId != 0 && item->ItemId != TreasureMapConstants.GargantuaskinItemId)
             {
                 // 检查是否是解读过的 G18 地图
                 // 解读后的地图 itemId 会变化
@@ -196,7 +196,7 @@ public class MapDecipherService : IDisposable
             if (actionManager == null) return false;
 
             // 使用解读技能
-            var actionType = ActionType.General;
+            var actionType = ActionType.GeneralAction;
             actionManager->UseAction(actionType, DecipherActionId);
 
             OnLog?.Invoke("执行解读技能");
@@ -216,7 +216,7 @@ public class MapDecipherService : IDisposable
             var actionManager = ActionManager.Instance();
             if (actionManager == null) return false;
 
-            var actionType = ActionType.General;
+            var actionType = ActionType.GeneralAction;
             actionManager->UseAction(actionType, DigActionId);
 
             OnLog?.Invoke("执行挖掘技能");

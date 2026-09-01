@@ -128,8 +128,13 @@ public class MapPurchaseService : IDisposable
         try
         {
             // 检查是否已在交易板附近
-            var mbAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.MJ);
-            if (mbAgent != null && mbAgent->IsAgentActive())
+            bool alreadyOpen;
+            unsafe
+            {
+                var mbAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.ItemSearch);
+                alreadyOpen = mbAgent != null && mbAgent->IsAgentActive();
+            }
+            if (alreadyOpen)
             {
                 OnLog?.Invoke("交易板已打开");
                 return true;
@@ -148,7 +153,7 @@ public class MapPurchaseService : IDisposable
             unsafe
             {
                 var agentInterface = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentModule.Instance();
-                agentInterface->GetAgentByInternalId(AgentId.MJ)->Show();
+                agentInterface->GetAgentByInternalId(AgentId.ItemSearch)->Show();
             }
 
             await Task.Delay(1000, token);
@@ -163,7 +168,7 @@ public class MapPurchaseService : IDisposable
 
     private Dalamud.Game.ClientState.Objects.Types.IGameObject? FindMarketBoardNpc()
     {
-        foreach (var obj in _plugin.ObjectTable)
+        foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
             var name = obj.Name.ToString();
@@ -183,8 +188,14 @@ public class MapPurchaseService : IDisposable
         try
         {
             // 获取交易板 Addon
-            var atkUnitBase = GetMarketBoardAddon();
-            if (atkUnitBase == null)
+            IntPtr atkPtr = IntPtr.Zero;
+            unsafe
+            {
+                var atkUnitBase = GetMarketBoardAddon();
+                if (atkUnitBase != null)
+                    atkPtr = (IntPtr)atkUnitBase;
+            }
+            if (atkPtr == IntPtr.Zero)
             {
                 OnLog?.Invoke("交易板 UI 未找到");
                 return false;
@@ -193,12 +204,12 @@ public class MapPurchaseService : IDisposable
             // 查找搜索输入框组件并输入搜索关键字
             var searchKeyword = SearchKeywordCN;
             // 使用 AtkValue 系统设置搜索文本
-            SetMarketBoardSearchText(atkUnitBase, searchKeyword);
+            unsafe { SetMarketBoardSearchText((AtkUnitBase*)atkPtr, searchKeyword); }
 
             await Task.Delay(1000, token);
 
             // 触发搜索
-            TriggerMarketBoardSearch(atkUnitBase);
+            unsafe { TriggerMarketBoardSearch((AtkUnitBase*)atkPtr); }
 
             await Task.Delay(2000, token);
             OnLog?.Invoke($"搜索完成: {searchKeyword}");
@@ -215,11 +226,17 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            var atkUnitBase = GetMarketBoardAddon();
-            if (atkUnitBase == null) return false;
+            IntPtr atkPtr = IntPtr.Zero;
+            unsafe
+            {
+                var atkUnitBase = GetMarketBoardAddon();
+                if (atkUnitBase != null)
+                    atkPtr = (IntPtr)atkUnitBase;
+            }
+            if (atkPtr == IntPtr.Zero) return false;
 
             // 选择第一个搜索结果（藏宝图）
-            SelectFirstSearchResult(atkUnitBase);
+            unsafe { SelectFirstSearchResult((AtkUnitBase*)atkPtr); }
             await Task.Delay(1000, token);
             return true;
         }
@@ -249,11 +266,17 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            var atkUnitBase = GetMarketBoardAddon();
-            if (atkUnitBase == null) return false;
+            IntPtr atkPtr = IntPtr.Zero;
+            unsafe
+            {
+                var atkUnitBase = GetMarketBoardAddon();
+                if (atkUnitBase != null)
+                    atkPtr = (IntPtr)atkUnitBase;
+            }
+            if (atkPtr == IntPtr.Zero) return false;
 
             // 点击购买按钮
-            ClickPurchaseButton(atkUnitBase);
+            unsafe { ClickPurchaseButton((AtkUnitBase*)atkPtr); }
             await Task.Delay(500, token);
 
             // 确认购买弹窗
@@ -271,7 +294,8 @@ public class MapPurchaseService : IDisposable
 
     private unsafe AtkUnitBase* GetMarketBoardAddon()
     {
-        return (AtkUnitBase*)_plugin.GameGui.GetAddonByName("MarketBoard");
+        var addon = Plugin.GameGui.GetAddonByName("MarketBoard");
+        return (AtkUnitBase*)addon.Address;
     }
 
     private unsafe void SetMarketBoardSearchText(AtkUnitBase* atkUnitBase, string text)
@@ -311,8 +335,8 @@ public class MapPurchaseService : IDisposable
     private unsafe void ConfirmPurchaseDialog()
     {
         // 确认购买弹窗
-        var confirmAddon = (AtkUnitBase*)_plugin.GameGui.GetAddonByName("SelectYesno");
-        if (confirmAddon == null) return;
+        var confirmAddon = Plugin.GameGui.GetAddonByName("SelectYesno");
+        if (confirmAddon.Address == IntPtr.Zero) return;
 
         // 触发"是"按钮
     }

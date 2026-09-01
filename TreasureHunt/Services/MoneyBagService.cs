@@ -48,7 +48,7 @@ public class MoneyBagService : IDisposable
     private int _bagsCollected = 0;
     private DateTime? _roomStartTime;
     private Vector3? _lastSafePosition;
-    private readonly HashSet<uint> _collectedBagIds = new();
+    private readonly HashSet<ulong> _collectedBagIds = new();
 
     public bool IsActive => _isActive;
     public int BagsCollected => _bagsCollected;
@@ -59,7 +59,7 @@ public class MoneyBagService : IDisposable
     public MoneyBagService(Plugin plugin)
     {
         _plugin = plugin;
-        _framework = _plugin.Framework;
+        _framework = Plugin.Framework;
         _framework.Update += OnFrameworkUpdate;
     }
 
@@ -125,7 +125,7 @@ public class MoneyBagService : IDisposable
                     if (danger != null)
                     {
                         OnLog?.Invoke($"检测到 AOE 危险，躲避中...");
-                        await DodgeAoe(danger, token);
+                        await DodgeAoe(danger.Value, token);
                         continue;
                     }
                 }
@@ -170,11 +170,11 @@ public class MoneyBagService : IDisposable
     /// </summary>
     private List<(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, bool isGolden, float distance)> GetAllShiningBagsSorted()
     {
-        var result = new List<(Dalamud.Game.ClientState.Objects.Types.IGameObject, bool, float)>();
-        var player = _plugin.ClientState.LocalPlayer;
+        var result = new List<(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, bool isGolden, float distance)>();
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return result;
 
-        foreach (var obj in _plugin.ObjectTable)
+        foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
             var name = obj.Name.ToString();
@@ -270,12 +270,12 @@ public class MoneyBagService : IDisposable
     /// </summary>
     private Vector3? CheckAoeDanger(Vector3 targetPos)
     {
-        var player = _plugin.ClientState.LocalPlayer;
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return null;
 
         // 检查目标位置附近是否有 AOE 危险
         // 通过检测施法中的敌人或地面效果
-        foreach (var obj in _plugin.ObjectTable)
+        foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
             if (obj.ObjectKind != Dalamud.Game.ClientState.Objects.Enums.ObjectKind.BattleNpc) continue;
@@ -299,7 +299,7 @@ public class MoneyBagService : IDisposable
     /// </summary>
     private async Task DodgeAoe(Vector3 dangerSource, CancellationToken token)
     {
-        var player = _plugin.ClientState.LocalPlayer;
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return;
 
         // 计算远离危险源的安全位置
@@ -324,23 +324,15 @@ public class MoneyBagService : IDisposable
     {
         try
         {
-            var player = _plugin.ClientState.LocalPlayer;
+            var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null) return;
 
             // 获取游戏内部的 Player 对象指针
-            var playerObj = GameObjectManager.Instance()->Objects.IndexSorted[0];
-            if (playerObj == null || !playerObj->IsPlayer()) return;
+            var playerObj = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)player.Address;
+            if (playerObj == null) return;
 
             // 修改位置
             playerObj->SetPosition(position.X, position.Y, position.Z);
-
-            // 确保位置更新生效
-            var framework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework.Instance();
-            if (framework != null)
-            {
-                // 更新游戏内部位置缓存
-                var pos = playerObj->GetPosition();
-            }
         }
         catch (Exception ex)
         {
@@ -368,7 +360,7 @@ public class MoneyBagService : IDisposable
         }
 
         // 检查是否在洞内（或被踢出）
-        var player = _plugin.ClientState.LocalPlayer;
+        var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return;
 
         // 检查是否还有袋子在刷新
