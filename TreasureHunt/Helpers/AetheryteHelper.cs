@@ -1,18 +1,21 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Enums;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 
 namespace TreasureHunt.Helpers;
 
 /// <summary>
 /// 水晶/传送辅助工具类
+/// 参考 TeleporterPlugin 的实现：先 UpdateAetheryteList 再操作
 /// </summary>
 public static unsafe class AetheryteHelper
 {
     /// <summary>
-    /// 获取当前附近可见的水晶对象（仅用于近距离导航参考）
+    /// 获取附近可见的水晶对象
     /// </summary>
     public static List<(uint aetheryteId, string name, Vector3 position)> GetNearbyVisibleAetherytes(Vector3 targetPos)
     {
@@ -21,7 +24,7 @@ public static unsafe class AetheryteHelper
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
-            if (obj.ObjectKind != Dalamud.Game.ClientState.Objects.Enums.ObjectKind.Aetheryte) continue;
+            if (obj.ObjectKind != ObjectKind.Aetheryte) continue;
 
             var name = obj.Name.ToString();
             var pos = obj.Position;
@@ -34,13 +37,43 @@ public static unsafe class AetheryteHelper
         return result;
     }
 
-    /// <summary>
-    /// 获取最近的可见水晶（仅用于近距离导航参考）
-    /// </summary>
     public static (uint aetheryteId, string name, Vector3 position)? GetNearestVisibleAetheryte(Vector3 targetPos)
     {
         var aetherytes = GetNearbyVisibleAetherytes(targetPos);
         return aetherytes.Count > 0 ? aetherytes[0] : null;
+    }
+
+    /// <summary>
+    /// 刷新水晶列表（必须在读取 TeleportList 前调用）
+    /// </summary>
+    private static bool RefreshAetheryteList()
+    {
+        try
+        {
+            if (Control.GetLocalPlayer() == null)
+            {
+                Plugin.Log.Warning("刷新水晶列表失败: 本地玩家为空");
+                return false;
+            }
+
+            var telepo = Telepo.Instance();
+            if (telepo == null) return false;
+
+            // 关键：必须先刷新列表，否则 TeleportList 可能为空或过期
+            var result = telepo->UpdateAetheryteList();
+            if (result == null)
+            {
+                Plugin.Log.Warning("UpdateAetheryteList 返回空");
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"刷新水晶列表异常: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -50,26 +83,61 @@ public static unsafe class AetheryteHelper
     {
         try
         {
-            var telepo = Telepo.Instance();
-            if (telepo == null) return false;
+            // 1. 检查本地玩家
+            if (Control.GetLocalPlayer() == null)
+            {
+                Plugin.Log.Warning("传送失败: 本地玩家为空");
+                return false;
+            }
 
-            // 检查是否正在传送中
+            // 2. 检查传送技能是否可用 (Action 5 = Teleport)
+            var status = ActionManager.Instance()->GetActionStatus(ActionType.Action, 5);
+            if (status != 0)
+            {
+                Plugin.Log.Warning($"传送技能不可用，状态码: {status}");
+                return false;
+            }
+
+            // 3. 检查是否正在传送中
             if (IsTeleporting())
             {
                 Plugin.Log.Warning("正在传送中，忽略新的传送请求");
                 return false;
             }
 
-            // 检查水晶是否已解锁
-            if (!IsAetheryteUnlocked(aetheryteId))
+            // 4. 刷新水晶列表
+            if (!RefreshAetheryteList())
             {
-                Plugin.Log.Warning($"水晶 {aetheryteId} 未解锁，无法传送");
+                Plugin.Log.Warning("刷新水晶列表失败");
                 return false;
             }
 
-            telepo->Teleport(aetheryteId, 0);
-            Plugin.Log.Information($"传送到水晶 ID: {aetheryteId}");
-            return true;
+            // 5. 在列表中查找目标水晶，获取 SubIndex
+            var telepo = Telepo.Instance();
+            if (telepo == null) return false;
+
+            byte subIndex = 0;
+            bool found = false;
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
+            {
+                if (telepo->TeleportList[i].AetheryteId == aetheryteId)
+                {
+                    subIndex = telepo->TeleportList[i].SubIndex;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                Plugin.Log.Warning($"水晶 {aetheryteId} 未在传送列表中找到");
+                return false;
+            }
+
+            // 6. 执行传送
+            var result = telepo->Teleport(aetheryteId, subIndex);
+            Plugin.Log.Information($"传送结果: {result} (水晶ID={aetheryteId}, SubIndex={subIndex})");
+            return result;
         }
         catch (Exception ex)
         {
@@ -85,24 +153,22 @@ public static unsafe class AetheryteHelper
     {
         try
         {
+            if (!RefreshAetheryteList()) return false;
+
             var telepo = Telepo.Instance();
             if (telepo == null) return false;
 
-            // 遍历已解锁的水晶列表 (StdVector 使用 Count 而不是 Length)
             for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
                 if (telepo->TeleportList[i].AetheryteId == aetheryteId)
-                {
                     return true;
-                }
             }
             return false;
         }
         catch (Exception ex)
         {
             Plugin.Log.Error($"检查水晶解锁状态失败: {ex.Message}");
-            // 出错时默认返回 true，避免误判
-            return true;
+            return false;
         }
     }
 
@@ -114,6 +180,8 @@ public static unsafe class AetheryteHelper
         var result = new List<(uint, uint, int)>();
         try
         {
+            if (!RefreshAetheryteList()) return result;
+
             var telepo = Telepo.Instance();
             if (telepo == null) return result;
 
@@ -131,7 +199,7 @@ public static unsafe class AetheryteHelper
     }
 
     /// <summary>
-    /// 通过水晶名称查找已解锁的水晶 ID
+    /// 通过名称查找已解锁的水晶 ID（支持中英文）
     /// </summary>
     public static uint FindAetheryteIdByName(string name)
     {
@@ -139,6 +207,8 @@ public static unsafe class AetheryteHelper
 
         try
         {
+            if (!RefreshAetheryteList()) return 0;
+
             var telepo = Telepo.Instance();
             if (telepo == null) return 0;
 
@@ -187,7 +257,6 @@ public static unsafe class AetheryteHelper
             var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
             if (aetheryteSheet == null) return string.Empty;
 
-            // GetRow 如果找不到行会返回默认值 (RowId=0)，通过 RowId 判断
             var row = aetheryteSheet.GetRow(aetheryteId);
             if (row.RowId != aetheryteId) return string.Empty;
 
@@ -203,7 +272,7 @@ public static unsafe class AetheryteHelper
     }
 
     /// <summary>
-    /// 检查是否正在传送中（区域切换）
+    /// 检查是否正在传送中
     /// </summary>
     public static bool IsTeleporting()
     {
@@ -220,10 +289,8 @@ public static unsafe class AetheryteHelper
         var inventory = InventoryManager.Instance();
         if (inventory == null) return false;
 
-        // 传送网使用券的 ItemId
         const uint aetheryteTicketId = 21073;
-        var count = inventory->GetInventoryItemCount(aetheryteTicketId);
-        return count > 0;
+        return inventory->GetInventoryItemCount(aetheryteTicketId) > 0;
     }
 
     /// <summary>
@@ -233,6 +300,8 @@ public static unsafe class AetheryteHelper
     {
         try
         {
+            if (!RefreshAetheryteList()) return 999;
+
             var telepo = Telepo.Instance();
             if (telepo == null) return 999;
 
@@ -240,9 +309,7 @@ public static unsafe class AetheryteHelper
             {
                 ref readonly var tp = ref telepo->TeleportList[i];
                 if (tp.AetheryteId == aetheryteId)
-                {
                     return (int)tp.GilCost;
-                }
             }
         }
         catch (Exception ex)

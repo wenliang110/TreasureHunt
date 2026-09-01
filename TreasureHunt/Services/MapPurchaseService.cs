@@ -160,24 +160,20 @@ public class MapPurchaseService : IDisposable
             {
                 OnLog?.Invoke("当前区域无交易板，尝试传送到主城...");
 
-                // 主城水晶 ID（三大主城的市场区域水晶）
-                var cityAetherytes = GetMainCityAetherytes();
-                var unlocked = AetheryteHelper.GetUnlockedAetherytes();
-
+                // 用名称查找已解锁的主城水晶（比硬编码 ID 更可靠）
+                var cityNames = new[] { "利姆萨", "格里达尼亚", "乌尔达哈" };
                 uint teleportTarget = 0;
                 string cityName = "";
-                foreach (var (aethId, terrId, name) in cityAetherytes)
+
+                foreach (var city in cityNames)
                 {
-                    foreach (var (uId, uTerr, uCost) in unlocked)
+                    var id = AetheryteHelper.FindAetheryteIdByName(city);
+                    if (id != 0)
                     {
-                        if (uId == aethId)
-                        {
-                            teleportTarget = aethId;
-                            cityName = name;
-                            break;
-                        }
+                        teleportTarget = id;
+                        cityName = city;
+                        break;
                     }
-                    if (teleportTarget != 0) break;
                 }
 
                 if (teleportTarget == 0)
@@ -186,18 +182,10 @@ public class MapPurchaseService : IDisposable
                     return false;
                 }
 
-                // 检查是否已在目标主城
-                var currentTerr = Plugin.ClientState.TerritoryType;
-                if (currentTerr == GetTerritoryForAetheryte(teleportTarget))
-                {
-                    OnLog?.Invoke($"已在 {cityName}，但未找到交易板，请使用 /thunt debug 查看附近对象");
-                    return false;
-                }
-
-                OnLog?.Invoke($"传送至 {cityName}...");
+                OnLog?.Invoke($"传送至 {cityName} (水晶ID={teleportTarget})...");
                 if (!AetheryteHelper.TeleportToAetheryte(teleportTarget))
                 {
-                    OnLog?.Invoke("传送失败");
+                    OnLog?.Invoke("传送失败，可能正在冷却中");
                     return false;
                 }
 
@@ -308,37 +296,6 @@ public class MapPurchaseService : IDisposable
             Plugin.Log.Error($"打开交易板异常: {ex}");
             return false;
         }
-    }
-
-    // 主城水晶列表（水晶ID, 领土ID, 名称）
-    private static readonly (uint aetheryteId, uint territoryId, string name)[] MainCityAetherytes =
-    {
-        // 利姆萨·罗敏萨
-        (2, 129, "利姆萨·罗敏萨"),    // Limsa Lominsa Lower Decks
-        (8, 128, "利姆萨上层"),       // Limsa Upper Decks
-        // 格里达尼亚
-        (9, 132, "格里达尼亚"),       // Old Gridania
-        (66, 133, "新格里达尼亚"),    // New Gridania
-        // 乌尔达哈
-        (1, 131, "乌尔达哈"),         // Ul'dah Steps of Nald
-        (12, 130, "乌尔达哈商业区"),  // Ul'dah Steps of Thal
-        // 基础：神拳都、白银乡等
-        (419, 478, "黄金港"),         // Kugane
-        (419, 814, "水晶都"),         // Crystarium
-    };
-
-    private static (uint aetheryteId, uint territoryId, string name)[] GetMainCityAetherytes()
-    {
-        return MainCityAetherytes;
-    }
-
-    private static uint GetTerritoryForAetheryte(uint aetheryteId)
-    {
-        foreach (var (id, terrId, _) in MainCityAetherytes)
-        {
-            if (id == aetheryteId) return terrId;
-        }
-        return 0;
     }
 
     // 市场布告板 DataId 列表（已知的市场布告板/召唤铃 DataId）
