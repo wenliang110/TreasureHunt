@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using TreasureHunt.Helpers;
 using TreasureHunt.Models;
 
 namespace TreasureHunt.Services;
@@ -127,7 +129,7 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            // 检查是否已在交易板附近
+            // 检查交易板是否已打开
             bool alreadyOpen;
             unsafe
             {
@@ -140,16 +142,63 @@ public class MapPurchaseService : IDisposable
                 return true;
             }
 
-            // 通过 RaptureTeleport 或直接调用 NPC 交互打开交易板
-            // 这里需要找到最近的交易板 NPC 并交互
-            var mbNpc = FindMarketBoardNpc();
+            // 查找最近的交易板
+            var mbNpc = FindNearestMarketBoard();
             if (mbNpc == null)
             {
-                OnLog?.Invoke("附近未找到交易板 NPC，请在市场区域使用");
+                OnLog?.Invoke("当前区域未找到交易板，请前往主城使用");
                 return false;
             }
 
-            // 使用 Agent 系统直接打开交易板
+            // 检查距离，远的话用 vnavmesh 寻路
+            var player = Plugin.ObjectTable.LocalPlayer;
+            if (player == null)
+            {
+                OnLog?.Invoke("无法获取玩家位置");
+                return false;
+            }
+
+            var distance = Vector3.Distance(player.Position, mbNpc.Position);
+            if (distance > 5.0f)
+            {
+                OnLog?.Invoke($"距离交易板 {distance:F1}m，开始自动寻路...");
+
+                if (!VnavmeshHelper.IsAvailable())
+                {
+                    OnLog?.Invoke("vnavmesh 不可用，无法自动寻路");
+                    return false;
+                }
+
+                VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
+
+                // 等待寻路完成
+                var timeout = TimeSpan.FromSeconds(30);
+                var startTime = DateTime.Now;
+                while ((DateTime.Now - startTime) < timeout)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    if (VnavmeshHelper.IsAtDestination(mbNpc.Position, 5.0f))
+                    {
+                        VnavmeshHelper.StopAutoRunning();
+                        OnLog?.Invoke("已到达交易板");
+                        break;
+                    }
+
+                    await Task.Delay(500, token);
+                }
+
+                if (!VnavmeshHelper.IsAtDestination(mbNpc.Position, 5.0f))
+                {
+                    VnavmeshHelper.StopAutoRunning();
+                    OnLog?.Invoke("寻路超时，未能到达交易板");
+                    return false;
+                }
+
+                await Task.Delay(500, token);
+            }
+
+            // 打开交易板
             unsafe
             {
                 var agentInterface = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentModule.Instance();
@@ -166,21 +215,33 @@ public class MapPurchaseService : IDisposable
         }
     }
 
-    private Dalamud.Game.ClientState.Objects.Types.IGameObject? FindMarketBoardNpc()
+    private Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestMarketBoard()
     {
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (player == null) return null;
+
+        Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
+        var minDistance = float.MaxValue;
+
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
             var name = obj.Name.ToString();
             if (name.Contains("市场", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Market", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains(" retainer", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("雇员", StringComparison.OrdinalIgnoreCase))
+                name.Contains("交易板", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("雇员", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("retainer", StringComparison.OrdinalIgnoreCase))
             {
-                return obj;
+                var dist = Vector3.Distance(player.Position, obj.Position);
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    nearest = obj;
+                }
             }
         }
-        return null;
+        return nearest;
     }
 
     private async Task<bool> SearchForMap(CancellationToken token)
