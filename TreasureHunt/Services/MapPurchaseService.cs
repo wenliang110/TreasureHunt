@@ -262,40 +262,42 @@ public class MapPurchaseService : IDisposable
         IGameObject? nearest = null;
         var minDistance = float.MaxValue;
 
-        // 第一轮：用 DataId 精确查找（市场布告板是 EventObj）
+        // 加载 EventObj Excel 表用于名称查找
+        // Lumina 中 EventObj 类型可能不存在，改为用 DataId + Name 双重检测
+
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
-            if (obj.ObjectKind != ObjectKind.EventObj) continue;
+            if (obj.ObjectKind != ObjectKind.EventObj &&
+                obj.ObjectKind != ObjectKind.EventNpc) continue;
 
             uint dataId = GetDataId(obj);
             bool isMarketBoard = false;
 
-            // 检查 DataId
+            // 1. 检查已知 DataId
             foreach (var id in MarketBoardDataIds)
             {
-                if (dataId == id)
-                {
-                    isMarketBoard = true;
-                    break;
-                }
+                if (dataId == id) { isMarketBoard = true; break; }
             }
 
-            // 检查名称（作为补充）
+            // 2. 检查 obj.Name
             if (!isMarketBoard)
             {
                 var name = obj.Name.ToString();
                 if (!string.IsNullOrEmpty(name))
                 {
-                    foreach (var keyword in MarketBoardKeywords)
+                    foreach (var kw in MarketBoardKeywords)
                     {
-                        if (name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                        {
-                            isMarketBoard = true;
-                            break;
-                        }
+                        if (name.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                        { isMarketBoard = true; break; }
                     }
                 }
+            }
+
+            // 3. 如果 Name 为空，记录 DataId 供调试
+            if (!isMarketBoard && dataId > 0)
+            {
+                Plugin.Log.Debug($"EventObj DataId={dataId} Name=\"{obj.Name}\" Kind={obj.ObjectKind}");
             }
 
             if (!isMarketBoard) continue;
@@ -305,38 +307,6 @@ public class MapPurchaseService : IDisposable
             {
                 minDistance = dist;
                 nearest = obj;
-            }
-        }
-
-        // 第二轮：如果没找到，放宽条件搜索所有 EventObj（名称包含关键字）
-        if (nearest == null)
-        {
-            foreach (var obj in Plugin.ObjectTable)
-            {
-                if (obj == null) continue;
-
-                // 只搜索 EventObj 和 EventNpc
-                if (obj.ObjectKind != ObjectKind.EventObj &&
-                    obj.ObjectKind != ObjectKind.EventNpc)
-                    continue;
-
-                var name = obj.Name.ToString();
-                if (string.IsNullOrEmpty(name)) continue;
-
-                // 宽松匹配：包含市场/布告/交易/board/market 等关键词
-                var lowerName = name.ToLower();
-                if (lowerName.Contains("市场") || lowerName.Contains("布告") ||
-                    lowerName.Contains("交易") || lowerName.Contains("market") ||
-                    lowerName.Contains("board") || lowerName.Contains("掲示") ||
-                    lowerName.Contains("売") || lowerName.Contains("shop"))
-                {
-                    var dist = Vector3.Distance(player.Position, obj.Position);
-                    if (dist < minDistance)
-                    {
-                        minDistance = dist;
-                        nearest = obj;
-                    }
-                }
             }
         }
 

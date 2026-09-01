@@ -5,12 +5,13 @@ using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using ECommons;
+using TreasureHunt.Helpers;
 using TreasureHunt.Services;
 using TreasureHunt.Windows;
 
 namespace TreasureHunt;
 
-public sealed class Plugin : IDalamudPlugin
+public sealed unsafe class Plugin : IDalamudPlugin
 {
     public string Name => "TreasureHunt";
 
@@ -103,7 +104,68 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
+        var subArgs = args.Trim().ToLower();
+        if (subArgs == "debug")
+        {
+            DebugNearbyObjects();
+            return;
+        }
+        if (subArgs == "dep" || subArgs == "deps" || subArgs == "dependency")
+        {
+            DebugDependencies();
+            return;
+        }
         ToggleMainUi();
+    }
+
+    private void DebugNearbyObjects()
+    {
+        var player = ObjectTable.LocalPlayer;
+        if (player == null)
+        {
+            ChatGui.Print("[TreasureHunt] 无法获取玩家位置");
+            return;
+        }
+
+        ChatGui.Print($"[TreasureHunt] === 附近对象列表 (坐标: {player.Position.X:F1}, {player.Position.Y:F1}, {player.Position.Z:F1}) ===");
+
+        var count = 0;
+        foreach (var obj in ObjectTable)
+        {
+            if (obj == null) continue;
+            var dist = System.Numerics.Vector3.Distance(player.Position, obj.Position);
+            if (dist > 100f) continue;
+
+            var name = obj.Name.ToString();
+            if (string.IsNullOrEmpty(name)) name = "(无名)";
+
+            var dataId = 0u;
+            try
+            {
+                unsafe
+                {
+                    var go = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)obj.Address;
+                    dataId = go->BaseId;
+                }
+            }
+            catch { }
+
+            ChatGui.Print($"  [{obj.ObjectKind}] Name=\"{name}\" DataId={dataId} Dist={dist:F1}m");
+            count++;
+        }
+        ChatGui.Print($"[TreasureHunt] 共 {count} 个对象 (100m内)");
+    }
+
+    private void DebugDependencies()
+    {
+        DependencyManager.ForceRefresh();
+        var statuses = DependencyManager.GetAllStatuses();
+        ChatGui.Print("[TreasureHunt] === 依赖插件状态 ===");
+        foreach (var kv in statuses)
+        {
+            var s = kv.Value;
+            ChatGui.Print($"  {s.DisplayName}: {(s.IsAvailable ? "OK" : "未检测到")}{(s.IsRequired ? " (必需)" : "")}");
+        }
     }
 
     public void ToggleConfigUi() => ConfigWindow.Toggle();
