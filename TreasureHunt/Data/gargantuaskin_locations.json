@@ -1,0 +1,58 @@
+[
+  {
+    "id": 1,
+    "mapX": 9.3,
+    "mapY": 10.5,
+    "nearestAetheryteName": "Leynode Memoris",
+    "nearestAetheryteNameCN": "记忆节点·记忆"
+  },
+  {
+    "id": 2,
+    "mapX": 10.3,
+    "mapY": 35.9,
+    "nearestAetheryteName": "Leynode Memoris",
+    "nearestAetheryteNameCN": "记忆节点·记忆"
+  },
+  {
+    "id": 3,
+    "mapX": 18.6,
+    "mapY": 15.8,
+    "nearestAetheryteName": "Leynode Wind",
+    "nearestAetheryteNameCN": "记忆节点·风"
+  },
+  {
+    "id": 4,
+    "mapX": 20.2,
+    "mapY": 23.0,
+    "nearestAetheryteName": "Leynode Wind",
+    "nearestAetheryteNameCN": "记忆节点·风"
+  },
+  {
+    "id": 5,
+    "mapX": 25.0,
+    "mapY": 6.9,
+    "nearestAetheryteName": "Leynode Wind",
+    "nearestAetheryteNameCN": "记忆节点·风"
+  },
+  {
+    "id": 6,
+    "mapX": 31.0,
+    "mapY": 18.1,
+    "nearestAetheryteName": "Leynode Fire",
+    "nearestAetheryteNameCN": "记忆节点·火"
+  },
+  {
+    "id": 7,
+    "mapX": 38.5,
+    "mapY": 28.1,
+    "nearestAetheryteName": "Leynode Fire",
+    "nearestAetheryteNameCN": "记忆节点·火"
+  },
+  {
+    "id": 8,
+    "mapX": 35.0,
+    "mapY": 35.3,
+    "nearestAetheryteName": "Leynode Memoris",
+    "nearestAetheryteNameCN": "记忆节点·记忆"
+  }
+]
