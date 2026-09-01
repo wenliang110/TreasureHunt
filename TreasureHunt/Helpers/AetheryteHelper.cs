@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -89,11 +88,10 @@ public static unsafe class AetheryteHelper
             var telepo = Telepo.Instance();
             if (telepo == null) return false;
 
-            // 遍历已解锁的水晶列表
-            for (var i = 0; i < telepo->TeleportList.Length; i++)
+            // 遍历已解锁的水晶列表 (StdVector 使用 Count 而不是 Length)
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
-                ref readonly var tp = ref telepo->TeleportList[i];
-                if (tp.AetheryteId == aetheryteId)
+                if (telepo->TeleportList[i].AetheryteId == aetheryteId)
                 {
                     return true;
                 }
@@ -111,19 +109,18 @@ public static unsafe class AetheryteHelper
     /// <summary>
     /// 获取所有已解锁的水晶列表
     /// </summary>
-    public static List<(uint aetheryteId, string name, uint territoryId)> GetUnlockedAetherytes()
+    public static List<(uint aetheryteId, uint territoryId, int gilCost)> GetUnlockedAetherytes()
     {
-        var result = new List<(uint, string, uint)>();
+        var result = new List<(uint, uint, int)>();
         try
         {
             var telepo = Telepo.Instance();
             if (telepo == null) return result;
 
-            for (var i = 0; i < telepo->TeleportList.Length; i++)
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
                 ref readonly var tp = ref telepo->TeleportList[i];
-                var name = tp.PlaceName.Value.Name.ToString();
-                result.Add((tp.AetheryteId, name, tp.TerritoryId));
+                result.Add((tp.AetheryteId, (uint)tp.TerritoryId, (int)tp.GilCost));
             }
         }
         catch (Exception ex)
@@ -134,7 +131,7 @@ public static unsafe class AetheryteHelper
     }
 
     /// <summary>
-    /// 通过名称查找已解锁的水晶 ID
+    /// 通过水晶名称查找已解锁的水晶 ID
     /// </summary>
     public static uint FindAetheryteIdByName(string name)
     {
@@ -145,33 +142,31 @@ public static unsafe class AetheryteHelper
             var telepo = Telepo.Instance();
             if (telepo == null) return 0;
 
-            for (var i = 0; i < telepo->TeleportList.Length; i++)
+            // 建立已解锁水晶 ID 的 hash set
+            var unlockedIds = new HashSet<uint>();
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
-                ref readonly var tp = ref telepo->TeleportList[i];
-                var placeName = tp.PlaceName.Value.Name.ToString();
-                var aethernetName = string.Empty;
+                unlockedIds.Add(telepo->TeleportList[i].AetheryteId);
+            }
 
-                // 也可以从 Aetheryte Excel 表读取 AethernetName
-                try
-                {
-                    var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
-                    if (aetheryteSheet != null)
-                    {
-                        var row = aetheryteSheet.GetRow(tp.AetheryteId);
-                        if (row.IsAetheryte)
-                        {
-                            aethernetName = row.AethernetName.Value.Name.ToString();
-                        }
-                    }
-                }
-                catch { }
+            // 从 Aetheryte Excel 表中查找匹配的水晶
+            var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
+            if (aetheryteSheet == null) return 0;
+
+            foreach (var row in aetheryteSheet)
+            {
+                if (!row.IsAetheryte) continue;
+                if (!unlockedIds.Contains(row.RowId)) continue;
+
+                var placeName = row.PlaceName.Value.Name.ToString();
+                var aethernetName = row.AethernetName.Value.Name.ToString();
 
                 if (placeName.Contains(name, StringComparison.OrdinalIgnoreCase) ||
                     aethernetName.Contains(name, StringComparison.OrdinalIgnoreCase) ||
                     name.Contains(placeName, StringComparison.OrdinalIgnoreCase) ||
                     name.Contains(aethernetName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return tp.AetheryteId;
+                    return row.RowId;
                 }
             }
         }
@@ -180,6 +175,31 @@ public static unsafe class AetheryteHelper
             Plugin.Log.Error($"按名称查找水晶失败 ({name}): {ex.Message}");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// 获取水晶名称
+    /// </summary>
+    public static string GetAetheryteName(uint aetheryteId)
+    {
+        try
+        {
+            var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
+            if (aetheryteSheet == null) return string.Empty;
+
+            // GetRow 如果找不到行会返回默认值 (RowId=0)，通过 RowId 判断
+            var row = aetheryteSheet.GetRow(aetheryteId);
+            if (row.RowId != aetheryteId) return string.Empty;
+
+            var aethernetName = row.AethernetName.Value.Name.ToString();
+            var placeName = row.PlaceName.Value.Name.ToString();
+            return !string.IsNullOrEmpty(aethernetName) ? aethernetName : placeName;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"获取水晶名称失败 ({aetheryteId}): {ex.Message}");
+            return string.Empty;
+        }
     }
 
     /// <summary>
@@ -216,12 +236,12 @@ public static unsafe class AetheryteHelper
             var telepo = Telepo.Instance();
             if (telepo == null) return 999;
 
-            for (var i = 0; i < telepo->TeleportList.Length; i++)
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
                 ref readonly var tp = ref telepo->TeleportList[i];
                 if (tp.AetheryteId == aetheryteId)
                 {
-                    return tp.GilCost;
+                    return (int)tp.GilCost;
                 }
             }
         }

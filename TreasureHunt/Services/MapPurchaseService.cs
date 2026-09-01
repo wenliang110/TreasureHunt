@@ -239,18 +239,7 @@ public class MapPurchaseService : IDisposable
             {
                 OnLog?.Invoke("交互交易板失败，尝试直接打开...");
                 // 回退：尝试直接打开 ItemSearch agent
-                unsafe
-                {
-                    var agentInterface = AgentModule.Instance();
-                    if (agentInterface != null)
-                    {
-                        var itemSearchAgent = agentInterface->GetAgentByInternalId(AgentId.ItemSearch);
-                        if (itemSearchAgent != null)
-                        {
-                            itemSearchAgent->Show();
-                        }
-                    }
-                }
+                OpenItemSearchAgent();
             }
 
             // 等待交易板窗口出现
@@ -293,7 +282,6 @@ public class MapPurchaseService : IDisposable
 
             // 市场布告板通常是 EventObj 类型
             if (obj.ObjectKind != ObjectKind.EventObj &&
-                obj.ObjectKind != ObjectKind.CombatNpc &&
                 obj.ObjectKind != ObjectKind.EventNpc)
             {
                 // 也检查一些特殊类型
@@ -361,16 +349,12 @@ public class MapPurchaseService : IDisposable
     /// </summary>
     private bool IsMarketBoardOpen()
     {
+        var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
+        if (addon.Address == IntPtr.Zero) return false;
         unsafe
         {
-            // ItemSearch addon 就是交易板窗口
-            var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
-            if (addon.Address != IntPtr.Zero)
-            {
-                var atkUnitBase = (AtkUnitBase*)addon.Address;
-                return atkUnitBase->IsVisible;
-            }
-            return false;
+            var atkUnitBase = (AtkUnitBase*)addon.Address;
+            return atkUnitBase->IsVisible;
         }
     }
 
@@ -394,6 +378,25 @@ public class MapPurchaseService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 直接打开 ItemSearch Agent (回退方案)
+    /// </summary>
+    private void OpenItemSearchAgent()
+    {
+        unsafe
+        {
+            var agentInterface = AgentModule.Instance();
+            if (agentInterface != null)
+            {
+                var itemSearchAgent = agentInterface->GetAgentByInternalId(AgentId.ItemSearch);
+                if (itemSearchAgent != null)
+                {
+                    itemSearchAgent->Show();
+                }
+            }
+        }
+    }
+
     private async Task<bool> SearchForMap(CancellationToken token)
     {
         try
@@ -401,42 +404,20 @@ public class MapPurchaseService : IDisposable
             var searchKeyword = SearchKeywordCN;
             OnLog?.Invoke($"搜索: {searchKeyword}");
 
-            unsafe
+            // 设置搜索文本
+            var setTextOk = SetSearchTextSafe(searchKeyword);
+            if (!setTextOk)
             {
-                var agent = GetItemSearchAgent();
-                if (agent == null)
-                {
-                    OnLog?.Invoke("未找到 ItemSearch Agent");
-                    return false;
-                }
-
-                // 使用 Agent 的搜索方法
-                // 先获取搜索输入框并设置文本
-                var atkUnitBase = GetItemSearchAddon();
-                if (atkUnitBase == null)
-                {
-                    OnLog?.Invoke("未找到 ItemSearch 窗口");
-                    return false;
-                }
-
-                // 方法1: 直接调用 Agent 的 Search 方法
-                // 通过 FireCallback 触发搜索，参数按实际 addon 结构
-                // ItemSearch 的搜索按钮通常是 callback 0
-
-                // 先找到搜索输入框并填入文字
-                if (!SetSearchText(atkUnitBase, searchKeyword))
-                {
-                    OnLog?.Invoke("设置搜索文本失败，尝试直接搜索...");
-                }
-
-                await Task.Delay(500, token);
-
-                // 触发搜索
-                atkUnitBase->FireCallback(0, null, false);
+                OnLog?.Invoke("设置搜索文本失败");
             }
 
+            await Task.Delay(500, token);
+
+            // 触发搜索
+            FireItemSearchCallback(0);
+            OnLog?.Invoke("执行搜索");
+
             await Task.Delay(1500, token);
-            OnLog?.Invoke("搜索完成");
             return true;
         }
         catch (Exception ex)
@@ -450,22 +431,9 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            unsafe
-            {
-                var atkUnitBase = GetItemSearchAddon();
-                if (atkUnitBase == null) return false;
-
-                // 选择第一个搜索结果
-                // ItemSearch 的结果列表通常通过 FireCallback 选择
-                var atkValues = stackalloc AtkValue[2];
-                atkValues[0].Type = AtkValueType.Int;
-                atkValues[0].Int = 0; // 第一个结果
-                atkValues[1].Type = AtkValueType.Int;
-                atkValues[1].Int = 0; // 列表索引
-
-                atkUnitBase->FireCallback(1, atkValues, false);
-                OnLog?.Invoke("选择第一个搜索结果");
-            }
+            // 选择第一个搜索结果 (callback index 1)
+            FireItemSearchCallback(1, 0);
+            OnLog?.Invoke("选择第一个搜索结果");
 
             await Task.Delay(1000, token);
             return true;
@@ -481,7 +449,7 @@ public class MapPurchaseService : IDisposable
     {
         await Task.Delay(500, token);
 
-        var price = ReadLowestPrice();
+        var price = ReadLowestPriceSafe();
         OnLog?.Invoke($"当前最低价格: {price}");
 
         if (price == 0)
@@ -501,21 +469,9 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            unsafe
-            {
-                var atkUnitBase = GetItemSearchAddon();
-                if (atkUnitBase == null) return false;
-
-                // 点击购买按钮
-                // ItemSearch 购买按钮的 callback 索引需要调试确认
-                // 通常购买按钮是一个特定的 callback
-                var atkValues = stackalloc AtkValue[1];
-                atkValues[0].Type = AtkValueType.Int;
-                atkValues[0].Int = 0;
-
-                atkUnitBase->FireCallback(2, atkValues, false);
-                OnLog?.Invoke("点击购买按钮");
-            }
+            // 点击购买按钮 (callback index 2)
+            FireItemSearchCallback(2, 0);
+            OnLog?.Invoke("点击购买按钮");
 
             await Task.Delay(800, token);
 
@@ -532,104 +488,117 @@ public class MapPurchaseService : IDisposable
         }
     }
 
-    private unsafe AtkUnitBase* GetItemSearchAddon()
+    // === 以下是 unsafe 辅助方法，避免在 async 方法中直接使用 unsafe ===
+
+    private unsafe AtkUnitBase* GetItemSearchAddonPtr()
     {
         var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
         if (addon.Address == IntPtr.Zero) return null;
         return (AtkUnitBase*)addon.Address;
     }
 
-    private unsafe AgentItemSearch* GetItemSearchAgent()
+    private bool SetSearchTextSafe(string text)
     {
-        try
+        unsafe
         {
-            var agentModule = AgentModule.Instance();
-            if (agentModule == null) return null;
+            var atkUnitBase = GetItemSearchAddonPtr();
+            if (atkUnitBase == null) return false;
 
-            var agent = agentModule->GetAgentByInternalId(AgentId.ItemSearch);
-            if (agent == null) return null;
-
-            return (AgentItemSearch*)agent;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private unsafe bool SetSearchText(AtkUnitBase* atkUnitBase, string text)
-    {
-        var uldManager = &atkUnitBase->UldManager;
-        for (var i = 0; i < uldManager->NodeListCount; i++)
-        {
-            var node = uldManager->NodeList[i];
-            if (node == null) continue;
-
-            var textInput = node->GetAsAtkComponentTextInput();
-            if (textInput == null) continue;
-
-            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
-            fixed (byte* pText = bytes)
+            var uldManager = &atkUnitBase->UldManager;
+            for (var i = 0; i < uldManager->NodeListCount; i++)
             {
-                textInput->SetText((InteropGenerator.Runtime.CStringPointer)pText);
+                var node = uldManager->NodeList[i];
+                if (node == null) continue;
+
+                var textInput = node->GetAsAtkComponentTextInput();
+                if (textInput == null) continue;
+
+                var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
+                fixed (byte* pText = bytes)
+                {
+                    textInput->SetText((InteropGenerator.Runtime.CStringPointer)pText);
+                }
+                OnLog?.Invoke($"设置搜索文本: {text}");
+                return true;
             }
-            OnLog?.Invoke($"设置搜索文本: {text}");
-            return true;
+            OnLog?.Invoke("未找到搜索输入框组件");
+            return false;
         }
-        OnLog?.Invoke("未找到搜索输入框组件");
-        return false;
     }
 
-    private unsafe int ReadLowestPrice()
+    private void FireItemSearchCallback(uint callbackIndex, int value = 0)
     {
-        var atkUnitBase = GetItemSearchAddon();
-        if (atkUnitBase == null) return 0;
-
-        var prices = new List<int>();
-        var uldManager = &atkUnitBase->UldManager;
-
-        for (var i = 0; i < uldManager->NodeListCount; i++)
+        unsafe
         {
-            var node = uldManager->NodeList[i];
-            if (node == null) continue;
-            if ((uint)node->Type != (uint)NodeType.Text) continue;
+            var atkUnitBase = GetItemSearchAddonPtr();
+            if (atkUnitBase == null) return;
 
-            var textNode = (AtkTextNode*)node;
-            var text = textNode->NodeText.ToString();
-            if (text.Length == 0) continue;
+            var atkValues = stackalloc AtkValue[2];
+            atkValues[0].Type = AtkValueType.Int;
+            atkValues[0].Int = value;
+            atkValues[1].Type = AtkValueType.Int;
+            atkValues[1].Int = 0;
 
-            // 价格格式：纯数字、带逗号、带 g/G 后缀
-            var clean = text.Replace(",", "").Replace(".", "").Replace(" ", "")
-                           .Replace("g", "").Replace("G", "").Replace("Ｇ", "");
+            atkUnitBase->FireCallback(callbackIndex, atkValues, false);
+        }
+    }
 
-            if (clean.Length > 0 && long.TryParse(clean, out var price))
+    private int ReadLowestPriceSafe()
+    {
+        unsafe
+        {
+            var atkUnitBase = GetItemSearchAddonPtr();
+            if (atkUnitBase == null) return 0;
+
+            var prices = new List<int>();
+            var uldManager = &atkUnitBase->UldManager;
+
+            for (var i = 0; i < uldManager->NodeListCount; i++)
             {
-                if (price > 0 && price < 100000000) // 合理范围
-                    prices.Add((int)price);
-            }
-        }
+                var node = uldManager->NodeList[i];
+                if (node == null) continue;
+                if ((uint)node->Type != (uint)NodeType.Text) continue;
 
-        if (prices.Count == 0) return 0;
-        prices.Sort();
-        return prices[0]; // 返回最低价
+                var textNode = (AtkTextNode*)node;
+                var text = textNode->NodeText.ToString();
+                if (text.Length == 0) continue;
+
+                // 价格格式：纯数字、带逗号、带 g/G 后缀
+                var clean = text.Replace(",", "").Replace(".", "").Replace(" ", "")
+                               .Replace("g", "").Replace("G", "").Replace("Ｇ", "");
+
+                if (clean.Length > 0 && long.TryParse(clean, out var price))
+                {
+                    if (price > 0 && price < 100000000) // 合理范围
+                        prices.Add((int)price);
+                }
+            }
+
+            if (prices.Count == 0) return 0;
+            prices.Sort();
+            return prices[0]; // 返回最低价
+        }
     }
 
-    private unsafe void ConfirmPurchaseDialog()
+    private void ConfirmPurchaseDialog()
     {
-        // 确认 SelectYesno 弹窗 (点击"是")
-        var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
-        if (addon.Address == IntPtr.Zero)
+        unsafe
         {
-            OnLog?.Invoke("未找到确认弹窗");
-            return;
-        }
+            // 确认 SelectYesno 弹窗 (点击"是")
+            var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
+            if (addon.Address == IntPtr.Zero)
+            {
+                OnLog?.Invoke("未找到确认弹窗");
+                return;
+            }
 
-        var selectYesno = (AtkUnitBase*)addon.Address;
-        var atkValues = stackalloc AtkValue[1];
-        atkValues[0].Type = AtkValueType.Bool;
-        atkValues[0].Byte = 1; // true = Yes
-        selectYesno->FireCallback(0, atkValues, false);
-        OnLog?.Invoke("确认购买");
+            var selectYesno = (AtkUnitBase*)addon.Address;
+            var atkValues = stackalloc AtkValue[1];
+            atkValues[0].Type = AtkValueType.Bool;
+            atkValues[0].Byte = 1; // true = Yes
+            selectYesno->FireCallback(0, atkValues, false);
+            OnLog?.Invoke("确认购买");
+        }
     }
 
     private async Task WaitAndSetState(PurchaseState state, CancellationToken token)

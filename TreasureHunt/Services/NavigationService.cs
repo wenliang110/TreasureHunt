@@ -207,9 +207,9 @@ public class NavigationService : IDisposable
     {
         try
         {
-            // 优先从已解锁水晶中查找同领土的
+            // 从已解锁水晶中查找同领土的（最可靠）
             var unlocked = AetheryteHelper.GetUnlockedAetherytes();
-            foreach (var (id, name, terrId) in unlocked)
+            foreach (var (id, terrId, gilCost) in unlocked)
             {
                 if (terrId == territoryId)
                 {
@@ -217,30 +217,25 @@ public class NavigationService : IDisposable
                 }
             }
 
-            // 如果没有同领土的，尝试从 Aetheryte Excel 表查找
+            // 如果没找到，尝试从 Aetheryte Excel 表中搜索（返回第一个同领土的已解锁水晶）
             var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
             if (aetheryteSheet != null)
             {
-                var ttSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.TerritoryType>();
-                if (ttSheet != null)
+                foreach (var row in aetheryteSheet)
                 {
-                    var ttRow = ttSheet.GetRow(territoryId);
-                    if (ttRow != null)
+                    if (!row.IsAetheryte) continue;
+                    // Territory 是 RowRef，通过 Value.RowId 获取领土 ID
+                    try
                     {
-                        var placeName = ttRow.PlaceName.RowId;
-                        foreach (var row in aetheryteSheet)
+                        if (row.Territory.Value.RowId == territoryId)
                         {
-                            if (!row.IsAetheryte) continue;
-                            if (row.Territory.Row == territoryId)
+                            if (AetheryteHelper.IsAetheryteUnlocked(row.RowId))
                             {
-                                // 检查是否已解锁
-                                if (AetheryteHelper.IsAetheryteUnlocked(row.RowId))
-                                {
-                                    return row.RowId;
-                                }
+                                return row.RowId;
                             }
                         }
                     }
+                    catch { continue; }
                 }
             }
         }
