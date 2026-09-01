@@ -4,7 +4,10 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.Types;
+using ECommons.GameFunctions;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -136,6 +139,7 @@ public class MapPurchaseService : IDisposable
 
     /// <summary>
     /// 打开交易板：寻路到最近的市场布告板 → 交互打开
+    /// 参考 AutoDuty 寻路模式重写
     /// </summary>
     private async Task<bool> OpenMarketBoard(CancellationToken token)
     {
@@ -149,16 +153,16 @@ public class MapPurchaseService : IDisposable
             }
 
             // 查找最近的交易板
-            var mbNpc = FindNearestMarketBoard();
-            if (mbNpc == null)
+            var mbObj = FindNearestMarketBoard();
+            if (mbObj == null)
             {
                 OnLog?.Invoke("当前区域未找到交易板，请前往主城使用");
+                OnLog?.Invoke("提示：如在主城仍找不到，请使用 /thunt debug 查看附近对象列表");
                 return false;
             }
 
-            OnLog?.Invoke($"找到交易板: {mbNpc.Name}");
+            OnLog?.Invoke($"找到交易板: {mbObj.Name} (距离 {Vector3.Distance(Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero, mbObj.Position):F1}m)");
 
-            // 检查距离，远的话用 vnavmesh 寻路
             var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null)
             {
@@ -166,85 +170,50 @@ public class MapPurchaseService : IDisposable
                 return false;
             }
 
-            var distance = Vector3.Distance(player.Position, mbNpc.Position);
-            if (distance > 5.0f)
-            {
-                OnLog?.Invoke($"距离交易板 {distance:F1}m，开始自动寻路...");
+            var distance = Vector3.Distance(player.Position, mbObj.Position);
 
+            // 如果距离较远，用 vnavmesh 寻路
+            if (distance > 3.5f)
+            {
                 if (!VnavmeshHelper.IsAvailable())
                 {
                     OnLog?.Invoke("vnavmesh 不可用，无法自动寻路");
                     return false;
                 }
 
-                var success = VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
-                if (!success)
+                OnLog?.Invoke($"距离 {distance:F1}m，开始自动寻路...");
+
+                // 使用新的 MoveToAsync（参考 AutoDuty 实现）
+                // 容差设为 2.5 米，确保在交互范围内
+                var arrived = await VnavmeshHelper.MoveToAsync(
+                    mbObj.Position,
+                    tolerance: 2.5f,
+                    fly: false,
+                    timeoutMs: 60000,
+                    token: token);
+
+                if (!arrived)
                 {
-                    OnLog?.Invoke("vnavmesh 寻路请求失败");
+                    OnLog?.Invoke("寻路未能到达目标，请检查路径是否被阻挡");
                     return false;
                 }
 
-                // 等待寻路完成
-                var timeout = TimeSpan.FromSeconds(60);
-                var startTime = DateTime.Now;
-                var lastMoveTime = DateTime.Now;
-                var lastPos = player.Position;
-
-                while ((DateTime.Now - startTime) < timeout)
-                {
-                    token.ThrowIfCancellationRequested();
-
-                    // 检查是否到达目标
-                    if (VnavmeshHelper.IsAtDestination(mbNpc.Position, 4.0f))
-                    {
-                        VnavmeshHelper.StopAutoRunning();
-                        OnLog?.Invoke("已到达交易板附近");
-                        break;
-                    }
-
-                    // 检查是否还在移动（防卡死检测）
-                    var currentPos = Plugin.ObjectTable.LocalPlayer?.Position ?? lastPos;
-                    var moved = Vector3.Distance(currentPos, lastPos);
-                    if (moved > 0.5f)
-                    {
-                        lastMoveTime = DateTime.Now;
-                        lastPos = currentPos;
-                    }
-                    else if ((DateTime.Now - lastMoveTime).TotalSeconds > 5)
-                    {
-                        // 5秒没动了，可能卡住了，重试一次
-                        OnLog?.Invoke("移动停滞，重新寻路...");
-                        VnavmeshHelper.StopAutoRunning();
-                        await Task.Delay(500, token);
-                        VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
-                        lastMoveTime = DateTime.Now;
-                    }
-
-                    await Task.Delay(500, token);
-                }
-
-                if (!VnavmeshHelper.IsAtDestination(mbNpc.Position, 4.0f))
-                {
-                    VnavmeshHelper.StopAutoRunning();
-                    OnLog?.Invoke("寻路超时，未能到达交易板");
-                    return false;
-                }
-
-                await Task.Delay(500, token);
+                OnLog?.Invoke("已到达交易板附近");
+                await Task.Delay(300, token);
             }
 
-            // 到达后，面向交易板并交互
-            OnLog?.Invoke("正在交互交易板...");
-            if (!InteractWithMarketBoard(mbNpc))
+            // 到达后，与交易板交互
+            OnLog?.Invoke("正在打开交易板...");
+            var interacted = InteractWithObject(mbObj);
+            if (!interacted)
             {
-                OnLog?.Invoke("交互交易板失败，尝试直接打开...");
-                // 回退：尝试直接打开 ItemSearch agent
+                OnLog?.Invoke("直接交互失败，尝试通过 Agent 打开...");
                 OpenItemSearchAgent();
             }
 
             // 等待交易板窗口出现
             var waitStart = DateTime.Now;
-            while ((DateTime.Now - waitStart) < TimeSpan.FromSeconds(5))
+            while ((DateTime.Now - waitStart).TotalSeconds < 5)
             {
                 token.ThrowIfCancellationRequested();
                 if (IsMarketBoardOpen())
@@ -258,47 +227,74 @@ public class MapPurchaseService : IDisposable
             OnLog?.Invoke("等待交易板打开超时");
             return IsMarketBoardOpen();
         }
+        catch (OperationCanceledException)
+        {
+            VnavmeshHelper.Stop();
+            OnLog?.Invoke("操作已取消");
+            return false;
+        }
         catch (Exception ex)
         {
             OnLog?.Invoke($"打开交易板失败: {ex.Message}");
+            Plugin.Log.Error($"打开交易板异常: {ex}");
             return false;
         }
     }
 
+    // 市场布告板 DataId 列表（已知的市场布告板/召唤铃 DataId）
+    // 参考：市场布告板约 2000736，召唤铃约 2000735
+    // 不同城市可能有不同的 DataId，所以用名称匹配作为主要方式
+    private static readonly uint[] MarketBoardDataIds = new uint[]
+    {
+        2000735, // 召唤铃
+        2000736, // 市场布告板
+    };
+
     /// <summary>
     /// 查找最近的市场布告板对象
+    /// 优先用 DataId 匹配，其次用名称匹配
     /// </summary>
-    private Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestMarketBoard()
+    private IGameObject? FindNearestMarketBoard()
     {
         var player = Plugin.ObjectTable.LocalPlayer;
         if (player == null) return null;
 
-        Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
+        IGameObject? nearest = null;
         var minDistance = float.MaxValue;
 
+        // 第一轮：用 DataId 精确查找（市场布告板是 EventObj）
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
+            if (obj.ObjectKind != ObjectKind.EventObj) continue;
 
-            // 市场布告板通常是 EventObj 类型
-            if (obj.ObjectKind != ObjectKind.EventObj &&
-                obj.ObjectKind != ObjectKind.EventNpc)
-            {
-                // 也检查一些特殊类型
-                if (obj.ObjectKind != (ObjectKind)63) // 市场布告板可能是特定类型
-                    continue;
-            }
-
-            var name = obj.Name.ToString();
-            if (string.IsNullOrEmpty(name)) continue;
-
+            uint dataId = GetDataId(obj);
             bool isMarketBoard = false;
-            foreach (var keyword in MarketBoardKeywords)
+
+            // 检查 DataId
+            foreach (var id in MarketBoardDataIds)
             {
-                if (name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                if (dataId == id)
                 {
                     isMarketBoard = true;
                     break;
+                }
+            }
+
+            // 检查名称（作为补充）
+            if (!isMarketBoard)
+            {
+                var name = obj.Name.ToString();
+                if (!string.IsNullOrEmpty(name))
+                {
+                    foreach (var keyword in MarketBoardKeywords)
+                    {
+                        if (name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                        {
+                            isMarketBoard = true;
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -312,24 +308,27 @@ public class MapPurchaseService : IDisposable
             }
         }
 
-        // 如果没找到，放宽条件：搜索所有 EventObj
+        // 第二轮：如果没找到，放宽条件搜索所有 EventObj（名称包含关键字）
         if (nearest == null)
         {
             foreach (var obj in Plugin.ObjectTable)
             {
                 if (obj == null) continue;
-                if (obj.ObjectKind != ObjectKind.EventObj) continue;
+
+                // 只搜索 EventObj 和 EventNpc
+                if (obj.ObjectKind != ObjectKind.EventObj &&
+                    obj.ObjectKind != ObjectKind.EventNpc)
+                    continue;
 
                 var name = obj.Name.ToString();
                 if (string.IsNullOrEmpty(name)) continue;
 
-                // 更宽松的匹配
-                if (name.Contains("市場", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("市场", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("market", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("掲示", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("布告", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains("board", StringComparison.OrdinalIgnoreCase))
+                // 宽松匹配：包含市场/布告/交易/board/market 等关键词
+                var lowerName = name.ToLower();
+                if (lowerName.Contains("市场") || lowerName.Contains("布告") ||
+                    lowerName.Contains("交易") || lowerName.Contains("market") ||
+                    lowerName.Contains("board") || lowerName.Contains("掲示") ||
+                    lowerName.Contains("売") || lowerName.Contains("shop"))
                 {
                     var dist = Vector3.Distance(player.Position, obj.Position);
                     if (dist < minDistance)
@@ -342,6 +341,49 @@ public class MapPurchaseService : IDisposable
         }
 
         return nearest;
+    }
+
+    /// <summary>
+    /// 获取游戏对象的 DataId（BaseId）
+    /// </summary>
+    private static unsafe uint GetDataId(IGameObject obj)
+    {
+        try
+        {
+            var go = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)obj.Address;
+            return go->BaseId;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// 调试：列出附近所有 EventObj（用于诊断找不到交易板的问题）
+    /// </summary>
+    public List<(string name, uint dataId, float distance, ObjectKind kind)> GetNearbyObjectsDebug()
+    {
+        var result = new List<(string, uint, float, ObjectKind)>();
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (player == null) return result;
+
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (obj == null) continue;
+
+            var name = obj.Name.ToString();
+            var dist = Vector3.Distance(player.Position, obj.Position);
+
+            // 只列出 100 米内的对象
+            if (dist > 100f) continue;
+
+            var dataId = GetDataId(obj);
+            result.Add((name, dataId, dist, obj.ObjectKind));
+        }
+
+        result.Sort((a, b) => a.Item3.CompareTo(b.Item3));
+        return result;
     }
 
     /// <summary>
@@ -359,21 +401,22 @@ public class MapPurchaseService : IDisposable
     }
 
     /// <summary>
-    /// 与交易板对象交互
+    /// 与游戏对象交互
+    /// 使用 ECommons 的 GameObjectHelper（经过验证的标准实现）
     /// </summary>
-    private bool InteractWithMarketBoard(Dalamud.Game.ClientState.Objects.Types.IGameObject mbObj)
+    private bool InteractWithObject(IGameObject obj)
     {
         try
         {
             // 先设为目标
-            GameObjectHelper.SetTarget(mbObj);
+            GameObjectHelper.SetTarget(obj);
 
-            // 使用 TargetSystem 交互
-            return GameObjectHelper.InteractWithObject(mbObj);
+            // 然后交互
+            return GameObjectHelper.InteractWithObject(obj);
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"交互交易板失败: {ex.Message}");
+            Plugin.Log.Error($"与对象交互失败: {ex.Message}");
             return false;
         }
     }
