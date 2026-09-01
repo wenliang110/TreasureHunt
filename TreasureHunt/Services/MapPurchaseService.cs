@@ -88,7 +88,10 @@ public class MapPurchaseService : IDisposable
             State = PurchaseState.OpeningMarketBoard;
 
             // 优先使用 PDR 远程交易板（无需跑到主城）
-            var usePdr = PdrMarketHelper.IsAvailable() && _plugin.Configuration.UsePdrMarket;
+            var pdrAvailable = PdrMarketHelper.IsAvailable();
+            var usePdr = pdrAvailable && _plugin.Configuration.UsePdrMarket;
+            OnLog?.Invoke($"PDR 检测: 可用={pdrAvailable}, 配置启用={_plugin.Configuration.UsePdrMarket}, 将使用={usePdr}");
+
             if (usePdr)
             {
                 OnLog?.Invoke("使用 PDR 远程交易板购买...");
@@ -230,10 +233,10 @@ public class MapPurchaseService : IDisposable
                 var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
                 OnLog?.Invoke($"已解锁水晶数量: {unlocked.Count}");
 
-                // 调试：列出所有已解锁水晶
-                foreach (var (id, name, _) in unlocked)
+                // 调试：列出前 10 个已解锁水晶的名称
+                for (int i = 0; i < Math.Min(10, unlocked.Count); i++)
                 {
-                    Plugin.Log.Debug($"已解锁水晶: ID={id} Name={name}");
+                    Plugin.Log.Debug($"水晶[{i}]: ID={unlocked[i].aetheryteId} Name={unlocked[i].name} Terr={unlocked[i].territoryId}");
                 }
 
                 uint teleportTarget = 0;

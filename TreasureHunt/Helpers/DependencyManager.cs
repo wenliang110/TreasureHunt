@@ -161,11 +161,29 @@ public static class DependencyManager
 
     private static bool CheckBetterMarketBoard()
     {
-        // 更好的市场布告板 (PandaDutyReborn / BetterMarketBoard)
-        // 插件名可能是 PandaDutyReborn 或 BetterMarketBoard
-        return IsAssemblyLoaded("PandaDutyReborn") ||
-               IsAssemblyLoaded("BetterMarketBoard") ||
-               IsAssemblyLoaded("PandaDuty");
+        // 更好的市场布告板 (PDR / PandaDutyReborn / BetterMarketBoard)
+        // 命令前缀 /pdr，可能是 PandaDutyReborn 的子模块，也可能是独立插件
+        var exactNames = new[] { "PandaDutyReborn", "PandaDuty", "BetterMarketBoard",
+            "MarketBoard", "MarketBoardEnhanced", "PDR", "PDReborn", "PandaDutyCN",
+            "PandaDutyRebornCN", "BetterMarket", "MarketEnhanced" };
+
+        foreach (var name in exactNames)
+        {
+            if (IsAssemblyLoaded(name)) return true;
+        }
+
+        // 模糊匹配：程序集名包含 pdr 或 bettermarket 或 marketboard
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            var asmName = asm.GetName().Name;
+            if (string.IsNullOrEmpty(asmName)) continue;
+            var lower = asmName.ToLowerInvariant();
+            if (lower.Contains("pdr") && lower.Contains("market")) return true;
+            if (lower.Contains("bettermarket")) return true;
+            if (lower.Contains("pandaduty") && lower.Contains("market")) return true;
+        }
+
+        return false;
     }
 
     public static void ForceRefresh()

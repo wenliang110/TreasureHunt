@@ -75,29 +75,72 @@ public static class MapLocationDatabase
     /// <summary>
     /// Iterate the Aetheryte Excel sheet and return the row ID (teleport ID) of the
     /// aetheryte whose place name matches the supplied string, ignoring case.
+    /// Prefer exact matches over partial matches.
     /// </summary>
     public static uint LookupAetheryteIdByName(string name)
     {
+        if (string.IsNullOrWhiteSpace(name)) return 0;
+
         try
         {
             var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
             if (sheet == null) return 0;
 
+            uint partialMatch = 0;
+            string partialMatchName = "";
+
             foreach (var row in sheet)
             {
                 if (!row.IsAetheryte) continue;
+
                 var placeName = row.PlaceName;
                 var aethernetName = row.AethernetName;
-                var pn = placeName.Value.Name.ToString();
-                var an = aethernetName.Value.Name.ToString();
-                if (pn.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-                    an.Contains(name, StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains(pn, StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains(an, StringComparison.OrdinalIgnoreCase))
+                var pn = placeName.IsValid ? placeName.Value.Name.ToString() : "";
+                var an = aethernetName.IsValid ? aethernetName.Value.Name.ToString() : "";
+
+                // 跳过空名称
+                if (string.IsNullOrWhiteSpace(pn) && string.IsNullOrWhiteSpace(an)) continue;
+
+                // 精确匹配（优先）
+                if (pn.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                    an.Equals(name, StringComparison.OrdinalIgnoreCase))
                 {
+                    Plugin.Log.Debug($"水晶精确匹配: ID={row.RowId} Name={pn}/{an} -> 查询={name}");
                     return row.RowId;
                 }
+
+                // 部分匹配（作为备选，记录第一个匹配的）
+                if (partialMatch == 0)
+                {
+                    bool containsMatch = false;
+                    if (!string.IsNullOrWhiteSpace(pn) && (
+                        pn.Contains(name, StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains(pn, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        containsMatch = true;
+                    }
+                    if (!containsMatch && !string.IsNullOrWhiteSpace(an) && (
+                        an.Contains(name, StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains(an, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        containsMatch = true;
+                    }
+
+                    if (containsMatch)
+                    {
+                        partialMatch = row.RowId;
+                        partialMatchName = !string.IsNullOrEmpty(an) ? an : pn;
+                    }
+                }
             }
+
+            if (partialMatch != 0)
+            {
+                Plugin.Log.Debug($"水晶部分匹配: ID={partialMatch} Name={partialMatchName} -> 查询={name}");
+                return partialMatch;
+            }
+
+            Plugin.Log.Warning($"未找到匹配的水晶: {name}");
         }
         catch (Exception ex)
         {
