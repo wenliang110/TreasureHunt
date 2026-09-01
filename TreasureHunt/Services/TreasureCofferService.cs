@@ -176,7 +176,64 @@ public class TreasureCofferService : IDisposable
             await Task.Delay(200, token);
         }
 
+        // 10秒没找到，尝试随机移动搜索（参考 SND 脚本）
+        OnLog?.Invoke("未找到宝箱，尝试随机移动搜索...");
+        var foundCoffer = await SearchForCofferByRandomMovement(token);
+        if (foundCoffer != null)
+        {
+            OnLog?.Invoke("随机移动后找到宝箱");
+            return foundCoffer;
+        }
+
         OnLog?.Invoke("等待宝箱超时");
+        return null;
+    }
+
+    /// <summary>
+    /// 随机移动搜索宝箱（参考 SND 脚本 3开启宝箱.lua 的 FindTreasureChest）
+    /// 在当前位置附近随机移动，每次移动后尝试寻找宝箱
+    /// </summary>
+    private async Task<Dalamud.Game.ClientState.Objects.Types.IGameObject?> SearchForCofferByRandomMovement(CancellationToken token)
+    {
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (player == null) return null;
+
+        var basePos = player.Position;
+        var random = new Random();
+
+        for (int attempt = 1; attempt <= 5; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+
+            // 检查当前是否已经有宝箱
+            var coffer = GameObjectHelper.GetTreasureCoffer();
+            if (coffer != null) return coffer;
+
+            // 生成随机偏移（±5米）
+            var offsetX = (float)(random.NextDouble() - 0.5) * 10f;
+            var offsetZ = (float)(random.NextDouble() - 0.5) * 10f;
+            var targetPos = new Vector3(basePos.X + offsetX, basePos.Y, basePos.Z + offsetZ);
+
+            OnLog?.Invoke($"随机移动搜索宝箱 ({attempt}/5)...");
+
+            // 移动到随机位置
+            if (VnavmeshHelper.IsAvailable())
+            {
+                await VnavmeshHelper.MoveToAsync(targetPos, tolerance: 1.5f, fly: false, timeoutMs: 8000, token: token);
+                VnavmeshHelper.Stop();
+            }
+            else
+            {
+                await Task.Delay(1500, token);
+            }
+
+            await Task.Delay(500, token);
+
+            // 再次检查宝箱
+            coffer = GameObjectHelper.GetTreasureCoffer();
+            if (coffer != null) return coffer;
+        }
+
         return null;
     }
 
@@ -216,10 +273,49 @@ public class TreasureCofferService : IDisposable
                 // 如果不是自己的，跳过
             }
 
-            // 交互宝箱
-            GameObjectHelper.InteractWithObject(coffer);
-            OnLog?.Invoke("已交互宝箱");
-            await Task.Delay(_plugin.Configuration.InteractionDelay, token);
+            // 持续交互宝箱直到目标消失（参考 SND 脚本的 ContinuousOpenChest）
+            // 宝箱触发后会召唤怪物，目标可能暂时不会消失，
+            // 所以这里我们只保证至少交互成功一次
+            OnLog?.Invoke("与宝箱交互（触发怪物）...");
+            int interactAttempts = 0;
+            const int maxAttempts = 5;
+
+            while (interactAttempts < maxAttempts)
+            {
+                token.ThrowIfCancellationRequested();
+                interactAttempts++;
+
+                // 重新定位宝箱（可能位置有变化）
+                var currentCoffer = GameObjectHelper.GetTreasureCoffer();
+                if (currentCoffer == null)
+                {
+                    OnLog?.Invoke($"宝箱已消失（第{interactAttempts}次交互后）");
+                    return true;
+                }
+
+                // 确保在交互范围内
+                if (!GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f))
+                {
+                    OnLog?.Invoke($"距离宝箱较远，重新靠近...");
+                    VnavmeshHelper.PathfindAndMoveTo(currentCoffer.Position);
+                    await Task.Delay(1000, token);
+                    VnavmeshHelper.StopAutoRunning();
+                }
+
+                // 交互
+                GameObjectHelper.InteractWithObject(currentCoffer);
+                OnLog?.Invoke($"交互宝箱 ({interactAttempts}/{maxAttempts})");
+                await Task.Delay(_plugin.Configuration.InteractionDelay + 500, token);
+
+                // 检查是否进入战斗（说明交互成功触发了怪物）
+                if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat])
+                {
+                    OnLog?.Invoke("已进入战斗，宝箱触发成功");
+                    return true;
+                }
+            }
+
+            OnLog?.Invoke($"已尝试 {maxAttempts} 次交互，继续下一步");
             return true;
         }
         catch (Exception ex)
@@ -275,13 +371,27 @@ public class TreasureCofferService : IDisposable
     {
         try
         {
-            // 再次交互宝箱开箱
-            if (!GameObjectHelper.IsInInteractRange(coffer, 3.0f))
+            // 战斗结束后，宝箱可能还在原地，也可能需要重新寻找
+            var currentCoffer = GameObjectHelper.GetTreasureCoffer();
+            if (currentCoffer == null)
             {
-                VnavmeshHelper.PathfindAndMoveTo(coffer.Position);
+                OnLog?.Invoke("战斗后未找到宝箱，尝试搜索...");
+                // 尝试在附近搜索
+                currentCoffer = await SearchForCofferByRandomMovement(token);
+                if (currentCoffer == null)
+                {
+                    OnLog?.Invoke("无法找到宝箱，可能已被开启或消失");
+                    return false;
+                }
+            }
+
+            // 移动到宝箱附近
+            if (!GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f))
+            {
+                VnavmeshHelper.PathfindAndMoveTo(currentCoffer.Position);
                 var moveTimeout = TimeSpan.FromSeconds(15);
                 var moveStart = DateTime.Now;
-                while (!GameObjectHelper.IsInInteractRange(coffer, 3.0f) && (DateTime.Now - moveStart) < moveTimeout)
+                while (!GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f) && (DateTime.Now - moveStart) < moveTimeout)
                 {
                     token.ThrowIfCancellationRequested();
                     await Task.Delay(200, token);
@@ -289,9 +399,39 @@ public class TreasureCofferService : IDisposable
                 VnavmeshHelper.StopAutoRunning();
             }
 
-            GameObjectHelper.InteractWithObject(coffer);
-            OnLog?.Invoke("已开箱");
-            await Task.Delay(1000, token);
+            // 持续开箱直到宝箱消失（参考 SND 脚本 ContinuousOpenChest）
+            OnLog?.Invoke("开始开启宝箱...");
+            int openAttempts = 0;
+            const int maxOpenAttempts = 10;
+
+            while (openAttempts < maxOpenAttempts)
+            {
+                token.ThrowIfCancellationRequested();
+                openAttempts++;
+
+                // 重新获取宝箱对象
+                var chest = GameObjectHelper.GetTreasureCoffer();
+                if (chest == null)
+                {
+                    OnLog?.Invoke($"宝箱已开启成功！（尝试{openAttempts}次）");
+                    return true;
+                }
+
+                // 确保在范围内
+                if (!GameObjectHelper.IsInInteractRange(chest, 3.0f))
+                {
+                    VnavmeshHelper.PathfindAndMoveTo(chest.Position);
+                    await Task.Delay(1000, token);
+                    VnavmeshHelper.StopAutoRunning();
+                }
+
+                // 交互开箱
+                GameObjectHelper.InteractWithObject(chest);
+                OnLog?.Invoke($"开箱尝试 ({openAttempts}/{maxOpenAttempts})");
+                await Task.Delay(1500, token);
+            }
+
+            OnLog?.Invoke($"开箱尝试达 {maxOpenAttempts} 次，假设已成功");
             return true;
         }
         catch (Exception ex)
@@ -304,7 +444,7 @@ public class TreasureCofferService : IDisposable
     private async Task<bool> CheckPortalSpawn(CancellationToken token)
     {
         OnLog?.Invoke("检查传送门...");
-        await Task.Delay(1000, token);
+        await Task.Delay(2000, token);
 
         var portal = GameObjectHelper.GetPortalTransferCircle();
         if (portal != null)
@@ -313,7 +453,63 @@ public class TreasureCofferService : IDisposable
             return true;
         }
 
+        // 没找到的话，尝试随机移动搜索（参考 SND 脚本 4开启传送魔纹.lua）
+        OnLog?.Invoke("未检测到传送门，尝试随机移动搜索...");
+        var foundPortal = await SearchForPortalByRandomMovement(token);
+        if (foundPortal)
+        {
+            OnLog?.Invoke("随机移动后找到传送门！");
+            return true;
+        }
+
         OnLog?.Invoke("无传送门，本张图结束");
+        return false;
+    }
+
+    /// <summary>
+    /// 随机移动搜索传送门（参考 SND 脚本 4开启传送魔纹.lua 的 FindPortal）
+    /// </summary>
+    private async Task<bool> SearchForPortalByRandomMovement(CancellationToken token)
+    {
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (player == null) return false;
+
+        var basePos = player.Position;
+        var random = new Random();
+
+        for (int attempt = 1; attempt <= 8; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+
+            // 先检查传送门
+            var portal = GameObjectHelper.GetPortalTransferCircle();
+            if (portal != null) return true;
+
+            // 生成随机偏移（±5米）
+            var offsetX = (float)(random.NextDouble() - 0.5) * 10f;
+            var offsetZ = (float)(random.NextDouble() - 0.5) * 10f;
+            var targetPos = new Vector3(basePos.X + offsetX, basePos.Y, basePos.Z + offsetZ);
+
+            OnLog?.Invoke($"随机移动搜索传送门 ({attempt}/8)...");
+
+            // 移动
+            if (VnavmeshHelper.IsAvailable())
+            {
+                await VnavmeshHelper.MoveToAsync(targetPos, tolerance: 1.0f, fly: false, timeoutMs: 8000, token: token);
+                VnavmeshHelper.Stop();
+            }
+            else
+            {
+                await Task.Delay(1500, token);
+            }
+
+            await Task.Delay(500, token);
+
+            // 再次检查
+            portal = GameObjectHelper.GetPortalTransferCircle();
+            if (portal != null) return true;
+        }
+
         return false;
     }
 

@@ -103,35 +103,103 @@ public class MapPurchaseService : IDisposable
                 usePdr = false;
             }
 
-            // 传统方式：原生交易板 UI 操作
+            // 传统方式：原生交易板 UI 操作（经过 SND 脚本验证的可靠方案）
             if (!usePdr)
             {
-                if (!await OpenMarketBoard(token))
-                    return new PurchaseResult { Success = false, ErrorMessage = "无法打开交易板" };
+                // 记录购买前的藏宝图数量（用于验证购买是否成功）
+                int initialMapCount = GetMapCountInInventory();
+                OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
 
-                await WaitAndSetState(PurchaseState.SearchingItem, token);
-                if (!await SearchForMap(token))
-                    return new PurchaseResult { Success = false, ErrorMessage = "搜索藏宝图失败" };
+                const int maxRetries = 3;
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                {
+                    OnLog?.Invoke($"原生交易板购买尝试 {attempt}/{maxRetries}");
 
-                await WaitAndSetState(PurchaseState.SelectingResult, token);
-                if (!await SelectSearchResult(token))
-                    return new PurchaseResult { Success = false, ErrorMessage = "选择搜索结果失败" };
+                    // 先关闭所有可能打开的窗口
+                    CloseAllMarketWindows();
+                    await Task.Delay(500, token);
 
-                await WaitAndSetState(PurchaseState.CheckingPrice, token);
-                var (valid, price) = await CheckPrice(token);
-                if (!valid)
-                    return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
+                    if (!await OpenMarketBoard(token))
+                    {
+                        OnLog?.Invoke($"打开交易板失败 (尝试 {attempt}/{maxRetries})");
+                        if (attempt < maxRetries)
+                        {
+                            OnLog?.Invoke("等待 3 秒后重试...");
+                            await Task.Delay(3000, token);
+                        }
+                        continue;
+                    }
 
-                await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
-                if (!await ConfirmPurchase(token))
-                    return new PurchaseResult { Success = false, ErrorMessage = "确认购买失败" };
+                    await WaitAndSetState(PurchaseState.SearchingItem, token);
+                    if (!await SearchForMap(token))
+                    {
+                        OnLog?.Invoke($"搜索失败 (尝试 {attempt}/{maxRetries})");
+                        if (attempt < maxRetries)
+                        {
+                            await Task.Delay(2000, token);
+                        }
+                        continue;
+                    }
 
-                await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
-                await Task.Delay(2000, token);
+                    await WaitAndSetState(PurchaseState.SelectingResult, token);
+                    if (!await SelectSearchResult(token))
+                    {
+                        OnLog?.Invoke($"选择结果失败 (尝试 {attempt}/{maxRetries})");
+                        if (attempt < maxRetries)
+                        {
+                            await Task.Delay(2000, token);
+                        }
+                        continue;
+                    }
 
-                State = PurchaseState.Done;
-                OnLog?.Invoke($"购买完成，价格: {price}");
-                return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
+                    await WaitAndSetState(PurchaseState.CheckingPrice, token);
+                    var (valid, price) = await CheckPrice(token);
+                    if (!valid)
+                    {
+                        OnLog?.Invoke($"价格检查失败: {price} > {_plugin.Configuration.MaxPurchasePrice}");
+                        CloseAllMarketWindows();
+                        return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
+                    }
+
+                    await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
+                    if (!await ConfirmPurchase(token))
+                    {
+                        OnLog?.Invoke($"确认购买失败 (尝试 {attempt}/{maxRetries})");
+                        if (attempt < maxRetries)
+                        {
+                            await Task.Delay(2000, token);
+                        }
+                        continue;
+                    }
+
+                    await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
+                    await Task.Delay(2500, token);
+
+                    // 验证购买是否成功（比较购买前后数量，参考 SND 脚本）
+                    int currentMapCount = GetMapCountInInventory();
+                    OnLog?.Invoke($"购买后藏宝图数量: {currentMapCount}");
+
+                    if (currentMapCount > initialMapCount)
+                    {
+                        State = PurchaseState.Done;
+                        OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {currentMapCount}，价格: {price}");
+                        CloseAllMarketWindows();
+                        return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
+                    }
+                    else
+                    {
+                        OnLog?.Invoke($"购买后背包数量未增加 (尝试 {attempt}/{maxRetries})");
+                        if (attempt < maxRetries)
+                        {
+                            OnLog?.Invoke("关闭窗口后重试...");
+                            CloseAllMarketWindows();
+                            await Task.Delay(2000, token);
+                        }
+                    }
+                }
+
+                CloseAllMarketWindows();
+                return new PurchaseResult { Success = false, ErrorMessage = $"原生交易板购买失败（已重试{maxRetries}次）" };
             }
 
             return new PurchaseResult { Success = false, ErrorMessage = "未知错误" };
@@ -155,8 +223,12 @@ public class MapPurchaseService : IDisposable
     }
 
     /// <summary>
-    /// 通过 PDR + InfoProxyItemSearch 直接购买（无需操作原生 UI）
-    /// PDR 打开 ImGui 窗口并搜索物品后，我们直接通过底层 API 读取列表并购买
+    /// 通过 PDR 远程交易板购买藏宝图
+    /// 策略：先用 InfoProxyItemSearch 底层 API 尝试（无声购买），
+    /// 失败则回退到鼠标模拟 Shift+右键点击 PDR 窗口第一个列表项
+    /// 
+    /// 注意：PDR 是 ImGui 窗口，不走原生 InfoProxyItemSearch 购买流程，
+    /// 所以底层 API 购买通常会失败，鼠标模拟是主要购买方式。
     /// </summary>
     private async Task<PurchaseResult> PurchaseMapViaPdr(CancellationToken token)
     {
@@ -165,71 +237,95 @@ public class MapPurchaseService : IDisposable
             var itemId = _plugin.Configuration.TreasureMapItemId;
             var maxPrice = _plugin.Configuration.MaxPurchasePrice;
 
+            // 记录购买前数量
+            int initialMapCount = GetMapCountInInventory();
+            OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
+
             // 1. 打开 PDR 市场并搜索物品
             OnLog?.Invoke($"执行 /pdr market {itemId} ...");
             PdrMarketHelper.OpenMarket(itemId);
 
-            // 2. 等待搜索结果加载（PDR 建立连接 + 获取列表数据）
+            // 2. 等待 PDR 窗口出现 + 数据加载
             State = PurchaseState.SearchingItem;
-            OnLog?.Invoke("等待 PDR 搜索结果加载...");
+            OnLog?.Invoke("等待 PDR 市场窗口和数据加载...");
 
-            var debugInfoBefore = PdrMarketHelper.GetDebugInfo();
-            Plugin.Log.Debug($"PDR 打开前状态:\n{debugInfoBefore}");
+            // 等待 PDR 打开并从服务器获取列表数据
+            // PDR 是 ImGui 窗口，加载需要约 2-4 秒
+            await Task.Delay(4000, token);
 
-            var resultsLoaded = await PdrMarketHelper.WaitForSearchResults(4000, token);
-
-            var debugInfoAfter = PdrMarketHelper.GetDebugInfo();
-            Plugin.Log.Debug($"PDR 等待后状态:\n{debugInfoAfter}");
-
-            if (!resultsLoaded)
+            // 3. 先尝试 InfoProxyItemSearch 底层 API 购买
+            // （如果 PDR 激活了原生代理，这种方式最干净）
+            var proxyCount = PdrMarketHelper.GetListingCount();
+            if (proxyCount > 0)
             {
-                var count = PdrMarketHelper.GetListingCount();
-                OnLog?.Invoke($"搜索结果加载超时，当前列表数: {count}");
-                OnLog?.Invoke("可能原因：PDR 未正确连接市场，或物品名称/ID有误");
-                return new PurchaseResult { Success = false, ErrorMessage = "搜索结果加载超时" };
+                OnLog?.Invoke($"InfoProxyItemSearch 有数据 ({proxyCount}条)，尝试底层 API 购买...");
+
+                var (price, quantity, resultItemId, isValid) = PdrMarketHelper.GetFirstListing();
+                if (isValid && price <= maxPrice)
+                {
+                    State = PurchaseState.ConfirmingPurchase;
+                    OnLog?.Invoke($"最低价格: {price}，尝试 API 直接购买...");
+
+                    bool apiOk = PdrMarketHelper.PurchaseFirstListing((uint)maxPrice);
+                    if (apiOk)
+                    {
+                        State = PurchaseState.WaitingForPurchase;
+                        await Task.Delay(2500, token);
+
+                        // 验证购买
+                        int afterCount = GetMapCountInInventory();
+                        if (afterCount > initialMapCount)
+                        {
+                            State = PurchaseState.Done;
+                            OnLog?.Invoke($"API 购买成功，价格: {price}，数量: {initialMapCount} → {afterCount}");
+                            return new PurchaseResult { Success = true, ItemId = resultItemId, Price = (int)price };
+                        }
+                    }
+                    else
+                    {
+                        OnLog?.Invoke("API 购买失败，回退到鼠标模拟购买...");
+                    }
+                }
+            }
+            else
+            {
+                OnLog?.Invoke("InfoProxyItemSearch 无数据（PDR不走原生流程，正常），使用鼠标模拟购买...");
             }
 
-            var listingCount = PdrMarketHelper.GetListingCount();
-            OnLog?.Invoke($"搜索完成，找到 {listingCount} 个结果");
-
-            // 3. 检查价格
-            State = PurchaseState.CheckingPrice;
-            var (price, quantity, resultItemId, isValid) = PdrMarketHelper.GetFirstListing();
-
-            if (!isValid)
-            {
-                OnLog?.Invoke("无法获取第一个商品信息");
-                return new PurchaseResult { Success = false, ErrorMessage = "无法获取商品信息" };
-            }
-
-            OnLog?.Invoke($"当前最低价格: {price} (数量: {quantity})");
-
-            if (price > maxPrice)
-            {
-                OnLog?.Invoke($"价格超出上限: {price} > {maxPrice}");
-                return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {maxPrice})" };
-            }
-
-            // 4. 直接购买（通过 InfoProxyItemSearch API）
+            // 4. 鼠标模拟购买：Shift + 右键点击第一个列表项
             State = PurchaseState.ConfirmingPurchase;
-            OnLog?.Invoke($"正在购买，价格: {price} ...");
+            OnLog?.Invoke("使用鼠标模拟 Shift+右键购买...");
+            OnLog?.Invoke("注意：鼠标会被自动移动，请不要操作鼠标");
 
-            bool purchaseOk = PdrMarketHelper.PurchaseFirstListing((uint)maxPrice);
+            bool mouseOk = PdrMarketHelper.PurchaseFirstListingByMouse();
 
-            if (!purchaseOk)
+            if (!mouseOk)
             {
-                OnLog?.Invoke("购买请求发送失败");
-                return new PurchaseResult { Success = false, ErrorMessage = "购买请求发送失败" };
+                OnLog?.Invoke("鼠标模拟购买发送失败");
+                return new PurchaseResult { Success = false, ErrorMessage = "鼠标模拟购买失败" };
             }
 
             // 5. 等待购买完成
             State = PurchaseState.WaitingForPurchase;
-            OnLog?.Invoke("购买请求已发送，等待交易完成...");
-            await Task.Delay(2500, token);
+            OnLog?.Invoke("购买指令已发送，等待交易完成...");
+            await Task.Delay(3000, token);
 
-            State = PurchaseState.Done;
-            OnLog?.Invoke($"购买完成，价格: {price}");
-            return new PurchaseResult { Success = true, ItemId = resultItemId, Price = (int)price };
+            // 6. 验证：比较购买前后数量
+            int finalCount = GetMapCountInInventory();
+            OnLog?.Invoke($"购买后藏宝图数量: {finalCount}");
+
+            if (finalCount > initialMapCount)
+            {
+                State = PurchaseState.Done;
+                OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {finalCount}");
+                return new PurchaseResult { Success = true, ItemId = itemId, Price = 0 };
+            }
+            else
+            {
+                OnLog?.Invoke("购买后背包数量未增加，购买可能失败");
+                OnLog?.Invoke("请检查 PDR 窗口是否被遮挡，或点击位置是否正确");
+                return new PurchaseResult { Success = false, ErrorMessage = "鼠标购买后数量未增加" };
+            }
         }
         catch (OperationCanceledException)
         {
@@ -763,45 +859,135 @@ public class MapPurchaseService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 搜索藏宝图（参考 SND 脚本：/callback ItemSearch true 9 false false 名称 ID false false false）
+    /// callback 9 = 搜索按钮，参数：[isHQ, isExact, itemName, itemId, unknown1, unknown2, unknown3]
+    /// 搜索后用 callback 5 轮询等待结果出现（SND 脚本的标准做法）
+    /// </summary>
     private async Task<bool> SearchForMap(CancellationToken token)
     {
         try
         {
-            var searchKeyword = SearchKeywordCN;
-            OnLog?.Invoke($"搜索: {searchKeyword}");
+            var itemId = _plugin.Configuration.TreasureMapItemId;
+            OnLog?.Invoke($"搜索藏宝图: {SearchKeywordCN} (ID={itemId})");
 
-            // 设置搜索文本
-            var setTextOk = SetSearchTextSafe(searchKeyword);
-            if (!setTextOk)
+            // 直接通过 callback 9 搜索（带物品名称和 ID）
+            // 参考 SND: /callback ItemSearch true 9 false false 陈旧的卡冈图亚革地图 46185 false false false
+            unsafe
             {
-                OnLog?.Invoke("设置搜索文本失败");
+                var addon = GetItemSearchAddonPtr();
+                if (addon == null)
+                {
+                    OnLog?.Invoke("ItemSearch addon 不存在");
+                    return false;
+                }
+
+                var atkValues = stackalloc AtkValue[7];
+                atkValues[0].Type = AtkValueType.Bool;
+                atkValues[0].Byte = 0; // isHQ = false
+                atkValues[1].Type = AtkValueType.Bool;
+                atkValues[1].Byte = 0; // isExact = false
+
+                // 物品名称
+                var nameBytes = System.Text.Encoding.UTF8.GetBytes(SearchKeywordCN + "\0");
+                fixed (byte* pName = nameBytes)
+                {
+                    atkValues[2].Type = AtkValueType.String;
+                    atkValues[2].String = (InteropGenerator.Runtime.CStringPointer)pName;
+
+                    // 物品 ID（作为字符串传递，与 SND 脚本一致）
+                    atkValues[3].Type = AtkValueType.String;
+                    var idStr = itemId.ToString();
+                    var idBytes = System.Text.Encoding.UTF8.GetBytes(idStr + "\0");
+                    fixed (byte* pId = idBytes)
+                    {
+                        atkValues[3].String = (InteropGenerator.Runtime.CStringPointer)pId;
+
+                        atkValues[4].Type = AtkValueType.Bool;
+                        atkValues[4].Byte = 0;
+                        atkValues[5].Type = AtkValueType.Bool;
+                        atkValues[5].Byte = 0;
+                        atkValues[6].Type = AtkValueType.Bool;
+                        atkValues[6].Byte = 0;
+
+                        addon->FireCallback(9, atkValues, true); // isEventBubbled = true
+                    }
+                }
             }
 
-            await Task.Delay(500, token);
+            OnLog?.Invoke("搜索指令已发送，等待结果加载...");
 
-            // 触发搜索
-            FireItemSearchCallback(0);
-            OnLog?.Invoke("执行搜索");
+            // 参考 SND 脚本：轮询等待搜索结果
+            // while not Addons.GetAddon("ItemSearchResult").Exists do
+            //   yield("/callback ItemSearch true 5 0")
+            //   yield("/wait 0.5")
+            // end
+            var waitStart = DateTime.Now;
+            var pollCount = 0;
+            while ((DateTime.Now - waitStart).TotalSeconds < 10)
+            {
+                token.ThrowIfCancellationRequested();
 
-            await Task.Delay(1500, token);
-            return true;
+                if (IsItemSearchResultOpen())
+                {
+                    OnLog?.Invoke($"搜索结果已加载（轮询{pollCount}次）");
+                    return true;
+                }
+
+                // 每 500ms 发送一次 callback 5 来刷新/选择结果（与 SND 脚本一致）
+                pollCount++;
+                unsafe
+                {
+                    var addon = GetItemSearchAddonPtr();
+                    if (addon != null)
+                    {
+                        var pollValues = stackalloc AtkValue[1];
+                        pollValues[0].Type = AtkValueType.Int;
+                        pollValues[0].Int = 0;
+                        addon->FireCallback(5, pollValues, true);
+                    }
+                }
+
+                await Task.Delay(500, token);
+            }
+
+            OnLog?.Invoke("等待搜索结果超时");
+            return IsItemSearchResultOpen();
         }
         catch (Exception ex)
         {
             OnLog?.Invoke($"搜索失败: {ex.Message}");
+            Plugin.Log.Error($"搜索异常: {ex}");
             return false;
         }
     }
 
+    /// <summary>
+    /// 选择第一个搜索结果（参考 SND：/callback ItemSearch true 5 0）
+    /// callback 5 = 选择搜索结果，参数 0 = 第一个结果
+    /// </summary>
     private async Task<bool> SelectSearchResult(CancellationToken token)
     {
         try
         {
-            // 选择第一个搜索结果 (callback index 1)
-            FireItemSearchCallback(1, 0);
-            OnLog?.Invoke("选择第一个搜索结果");
+            unsafe
+            {
+                var addon = GetItemSearchAddonPtr();
+                if (addon == null)
+                {
+                    OnLog?.Invoke("ItemSearch addon 不存在");
+                    return false;
+                }
 
-            await Task.Delay(1000, token);
+                var atkValues = stackalloc AtkValue[1];
+                atkValues[0].Type = AtkValueType.Int;
+                atkValues[0].Int = 0; // 第一个结果索引
+
+                addon->FireCallback(5, atkValues, true); // isEventBubbled = true
+            }
+
+            OnLog?.Invoke("选择第一个搜索结果");
+            await Task.Delay(1500, token);
             return true;
         }
         catch (Exception ex)
@@ -811,12 +997,26 @@ public class MapPurchaseService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 检查价格（从 ItemSearchResult 读取最低价）
+    /// </summary>
     private async Task<(bool valid, int price)> CheckPrice(CancellationToken token)
     {
         await Task.Delay(500, token);
 
-        var price = ReadLowestPriceSafe();
-        OnLog?.Invoke($"当前最低价格: {price}");
+        // 先尝试从 InfoProxyItemSearch 读取（最准确）
+        var proxyPrice = PdrMarketHelper.GetListingPrice(0);
+        if (proxyPrice > 0)
+        {
+            OnLog?.Invoke($"当前最低价格 (InfoProxy): {proxyPrice}");
+            if (proxyPrice > _plugin.Configuration.MaxPurchasePrice)
+                return (false, (int)proxyPrice);
+            return (true, (int)proxyPrice);
+        }
+
+        // 回退：从 UI 文本读取
+        var price = ReadLowestPriceFromResult();
+        OnLog?.Invoke($"当前最低价格 (UI): {price}");
 
         if (price == 0)
         {
@@ -831,25 +1031,69 @@ public class MapPurchaseService : IDisposable
         return (true, price);
     }
 
+    /// <summary>
+    /// 确认购买（参考 SND：/callback ItemSearchResult true 2 0 + /callback SelectYesno true 0）
+    /// 注意：购买按钮在 ItemSearchResult addon 上，不是 ItemSearch！
+    /// callback 2 = 购买按钮，参数 0 = 第一个列表项
+    /// 改进：等待 SelectYesno 弹窗出现后再确认（避免弹窗还没出来就点击）
+    /// </summary>
     private async Task<bool> ConfirmPurchase(CancellationToken token)
     {
         try
         {
-            // 点击购买按钮 (callback index 2)
-            FireItemSearchCallback(2, 0);
-            OnLog?.Invoke("点击购买按钮");
+            OnLog?.Invoke("点击购买按钮 (ItemSearchResult)...");
 
-            await Task.Delay(800, token);
+            unsafe
+            {
+                var resultAddon = GetItemSearchResultAddonPtr();
+                if (resultAddon == null)
+                {
+                    OnLog?.Invoke("ItemSearchResult addon 不存在，无法购买");
+                    return false;
+                }
 
-            // 确认购买弹窗 (SelectYesno)
-            ConfirmPurchaseDialog();
-            await Task.Delay(800, token);
+                // 点击购买按钮（ItemSearchResult callback 2）
+                var atkValues = stackalloc AtkValue[1];
+                atkValues[0].Type = AtkValueType.Int;
+                atkValues[0].Int = 0; // 第一个列表项
 
-            return true;
+                resultAddon->FireCallback(2, atkValues, true); // isEventBubbled = true
+            }
+
+            // 等待 SelectYesno 弹窗出现（SND 脚本等 3 秒）
+            OnLog?.Invoke("等待确认购买弹窗...");
+            var yesnoWaitStart = DateTime.Now;
+            while ((DateTime.Now - yesnoWaitStart).TotalSeconds < 3)
+            {
+                token.ThrowIfCancellationRequested();
+                if (IsSelectYesnoOpen())
+                {
+                    OnLog?.Invoke("确认购买弹窗已出现");
+                    break;
+                }
+                await Task.Delay(200, token);
+            }
+
+            // 确认购买 (SelectYesno callback 0 = 是)
+            if (IsSelectYesnoOpen())
+            {
+                OnLog?.Invoke("确认购买...");
+                ConfirmPurchaseDialog();
+                await Task.Delay(1500, token);
+                return true;
+            }
+            else
+            {
+                OnLog?.Invoke("未出现确认购买弹窗，可能自动购买成功或购买失败");
+                // 即使没有弹窗也返回 true，让后续背包验证来判断是否成功
+                await Task.Delay(1000, token);
+                return true;
+            }
         }
         catch (Exception ex)
         {
             OnLog?.Invoke($"确认购买失败: {ex.Message}");
+            Plugin.Log.Error($"确认购买异常: {ex}");
             return false;
         }
     }
@@ -861,6 +1105,44 @@ public class MapPurchaseService : IDisposable
         var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
         if (addon.Address == IntPtr.Zero) return null;
         return (AtkUnitBase*)addon.Address;
+    }
+
+    /// <summary>
+    /// 获取 ItemSearchResult addon 指针（搜索结果窗口）
+    /// </summary>
+    private unsafe AtkUnitBase* GetItemSearchResultAddonPtr()
+    {
+        var addon = Plugin.GameGui.GetAddonByName("ItemSearchResult");
+        if (addon.Address == IntPtr.Zero) return null;
+        return (AtkUnitBase*)addon.Address;
+    }
+
+    /// <summary>
+    /// 检查搜索结果窗口是否已打开
+    /// </summary>
+    private bool IsItemSearchResultOpen()
+    {
+        var addon = Plugin.GameGui.GetAddonByName("ItemSearchResult");
+        if (addon.Address == IntPtr.Zero) return false;
+        unsafe
+        {
+            var atkUnitBase = (AtkUnitBase*)addon.Address;
+            return atkUnitBase->IsVisible;
+        }
+    }
+
+    /// <summary>
+    /// 检查 SelectYesno 确认弹窗是否已打开
+    /// </summary>
+    private bool IsSelectYesnoOpen()
+    {
+        var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
+        if (addon.Address == IntPtr.Zero) return false;
+        unsafe
+        {
+            var atkUnitBase = (AtkUnitBase*)addon.Address;
+            return atkUnitBase->IsVisible;
+        }
     }
 
     private bool SetSearchTextSafe(string text)
@@ -909,11 +1191,14 @@ public class MapPurchaseService : IDisposable
         }
     }
 
-    private int ReadLowestPriceSafe()
+    /// <summary>
+    /// 从 ItemSearchResult 窗口读取最低价格
+    /// </summary>
+    private int ReadLowestPriceFromResult()
     {
         unsafe
         {
-            var atkUnitBase = GetItemSearchAddonPtr();
+            var atkUnitBase = GetItemSearchResultAddonPtr();
             if (atkUnitBase == null) return 0;
 
             var prices = new List<int>();
@@ -951,6 +1236,7 @@ public class MapPurchaseService : IDisposable
         unsafe
         {
             // 确认 SelectYesno 弹窗 (点击"是")
+            // 参考 SND: /callback SelectYesno true 0
             var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
             if (addon.Address == IntPtr.Zero)
             {
@@ -960,10 +1246,101 @@ public class MapPurchaseService : IDisposable
 
             var selectYesno = (AtkUnitBase*)addon.Address;
             var atkValues = stackalloc AtkValue[1];
-            atkValues[0].Type = AtkValueType.Bool;
-            atkValues[0].Byte = 1; // true = Yes
-            selectYesno->FireCallback(0, atkValues, false);
-            OnLog?.Invoke("确认购买");
+            atkValues[0].Type = AtkValueType.Int;
+            atkValues[0].Int = 0; // 0 = 是 (Yes)
+            selectYesno->FireCallback(0, atkValues, true); // isEventBubbled = true
+            OnLog?.Invoke("确认购买 (SelectYesno)");
+        }
+    }
+
+    /// <summary>
+    /// 关闭所有市场相关窗口（重试前清理）
+    /// </summary>
+    private void CloseAllMarketWindows()
+    {
+        unsafe
+        {
+            // 关闭 ItemSearchResult
+            var resultAddon = GetItemSearchResultAddonPtr();
+            if (resultAddon != null && resultAddon->IsVisible)
+            {
+                resultAddon->Hide(true, false, 0);
+                Plugin.Log.Debug("已关闭 ItemSearchResult");
+            }
+
+            // 关闭 ItemSearch
+            var searchAddon = GetItemSearchAddonPtr();
+            if (searchAddon != null && searchAddon->IsVisible)
+            {
+                searchAddon->Hide(true, false, 0);
+                Plugin.Log.Debug("已关闭 ItemSearch");
+            }
+
+            // 关闭 SelectYesno
+            var yesnoAddon = Plugin.GameGui.GetAddonByName("SelectYesno");
+            if (yesnoAddon.Address != IntPtr.Zero)
+            {
+                var atk = (AtkUnitBase*)yesnoAddon.Address;
+                if (atk->IsVisible)
+                {
+                    atk->Hide(true, false, 0);
+                    Plugin.Log.Debug("已关闭 SelectYesno");
+                }
+            }
+        }
+
+        // 清除目标
+        try
+        {
+            Plugin.TargetManager.Target = null;
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 统计背包中藏宝图的总数量（所有背包页）
+    /// 参考 SND 脚本：Inventory.GetItemCount
+    /// </summary>
+    private int GetMapCountInInventory()
+    {
+        try
+        {
+            var itemId = _plugin.Configuration.TreasureMapItemId;
+            unsafe
+            {
+                var invManager = InventoryManager.Instance();
+                if (invManager == null) return 0;
+
+                int count = 0;
+                // 检查 4 个背包页: Inventory1 ~ Inventory4
+                var inventoryTypes = new[]
+                {
+                    InventoryType.Inventory1,
+                    InventoryType.Inventory2,
+                    InventoryType.Inventory3,
+                    InventoryType.Inventory4
+                };
+                foreach (var invType in inventoryTypes)
+                {
+                    var inventory = invManager->GetInventoryContainer(invType);
+                    if (inventory == null) continue;
+
+                    for (var i = 0; i < inventory->Size; i++)
+                    {
+                        var invItem = inventory->GetInventorySlot(i);
+                        if (invItem->ItemId == itemId)
+                        {
+                            count += invItem->Quantity;
+                        }
+                    }
+                }
+                return count;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"统计藏宝图数量失败: {ex.Message}");
+            return 0;
         }
     }
 

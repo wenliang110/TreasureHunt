@@ -164,6 +164,28 @@ public class TreasureHuntOrchestrator : IDisposable
                     worldPos = MapToWorldPosition(mapData.Location.MapX, mapData.Location.MapY, mapData.Location.TerritoryId);
                 }
 
+                OnLog?.Invoke($"解读坐标: ({worldPos.X:F1}, {worldPos.Y:F1}, {worldPos.Z:F1})");
+
+                // 参考 SND 脚本：用 8 个 G18 宝箱预设位置修正导航目标
+                // 藏宝图解读后的 flag 坐标可能有偏差，取最近的预设宝箱位置更准确
+                var currentTerritory = Plugin.ClientState.TerritoryType;
+                if (currentTerritory == TreasureMapConstants.GargantuaskinTerritoryId)
+                {
+                    var nearestChest = TreasureMapConstants.GetNearestG18ChestPosition(worldPos);
+                    var flagToChestDist = Vector3.Distance(new Vector3(worldPos.X, 0, worldPos.Z), 
+                                                           new Vector3(nearestChest.X, 0, nearestChest.Z));
+                    
+                    if (flagToChestDist < 100f) // 距离在合理范围内才修正（避免误判）
+                    {
+                        OnLog?.Invoke($"修正到最近宝箱预设位置: ({nearestChest.X:F1}, {nearestChest.Y:F1}, {nearestChest.Z:F1}) (偏差 {flagToChestDist:F1}m)");
+                        worldPos = nearestChest;
+                    }
+                    else
+                    {
+                        OnLog?.Invoke($"最近预设位置距离 {flagToChestDist:F1}m，超出合理范围，使用原始解读坐标");
+                    }
+                }
+
                 OnLog?.Invoke($"导航到世界坐标: ({worldPos.X:F1}, {worldPos.Y:F1}, {worldPos.Z:F1})");
 
                 var navResult = await _plugin.NavigationService.NavigateToAsync(worldPos, "藏宝图点位");
