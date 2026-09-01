@@ -7,10 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
+    "Changelog": "v0.1.0.0 - 初始版本\n- 支持陈旧的卡冈图亚革地图 (G18, 道具ID 46185)\n- 自动购买、解读、传送、导航、挖掘\n- 进洞、下一层交互\n- TP 钱袋子奖励房自动收集\n- 模块化设计，5个可配置功能开关",
+    "AssemblyVersion": "0.1.0.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
     "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/latest/download/TreasureHunt.zip",
     "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/latest/download/TreasureHunt.zip",
-    "Changelog": "v0.1.0.0 - 初始版本\n- 支持陈旧的卡冈图亚革地图 (G18, 道具ID 46185)\n- 自动购买、解读、传送、导航、挖掘\n- 进洞、下一层交互\n- TP 钱袋子奖励房自动收集\n- 模块化设计，5个可配置功能开关"
+    "DownloadCount": 0,
+    "LastUpdate": "1788255600"
   }
 ]
