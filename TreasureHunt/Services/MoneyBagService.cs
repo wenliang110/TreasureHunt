@@ -5,8 +5,6 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using TreasureHunt.Helpers;
 
 namespace TreasureHunt.Services;
@@ -20,6 +18,11 @@ public class MoneyBagResult
     public bool TimeExpired { get; set; }
 }
 
+/// <summary>
+/// TP 钱袋子奖励房自动收集服务
+/// 策略：使用 vnavmesh 快速导航到袋子位置并交互
+/// 注意：直接修改玩家位置（瞬移）在大多数情况下无效，因此默认使用 vnavmesh 导航
+/// </summary>
 public class MoneyBagService : IDisposable
 {
     private readonly Plugin _plugin;
@@ -35,10 +38,8 @@ public class MoneyBagService : IDisposable
     private const int TargetBagCount = 100;
     private const int BonusRoomTimeLimitSec = 90;
     private const float BagInteractRange = 3.0f;
-    private const int BagScanIntervalMs = 100;
-    private const float AoeDangerRange = 5.0f;
 
-    // 辉く袋 (Shining Bag) 名称
+    // 袋子名称
     private const string ShiningBagNameJP = "輝く袋";
     private const string GoldenShiningBagNameJP = "金の輝く袋";
     private const string ShiningBagNameCN = "闪亮的袋子";
@@ -47,8 +48,8 @@ public class MoneyBagService : IDisposable
     // 当前收集状态
     private int _bagsCollected = 0;
     private DateTime? _roomStartTime;
-    private Vector3? _lastSafePosition;
     private readonly HashSet<ulong> _collectedBagIds = new();
+    private Vector3 _lastTargetPos = Vector3.Zero;
 
     public bool IsActive => _isActive;
     public int BagsCollected => _bagsCollected;
@@ -82,11 +83,14 @@ public class MoneyBagService : IDisposable
 
         OnLog?.Invoke("=== TP 钱袋子奖励房开始 ===");
         OnLog?.Invoke($"目标: {TargetBagCount} 个袋子，限时: {BonusRoomTimeLimitSec} 秒");
+        OnLog?.Invoke($"使用 vnavmesh 导航模式");
 
         try
         {
             while (_bagsCollected < TargetBagCount && !token.IsCancellationRequested)
             {
+                token.ThrowIfCancellationRequested();
+
                 // 检查时间
                 var elapsed = (DateTime.Now - _roomStartTime.Value).TotalSeconds;
                 if (elapsed >= BonusRoomTimeLimitSec)
@@ -106,7 +110,7 @@ public class MoneyBagService : IDisposable
                 if (bags.Count == 0)
                 {
                     // 没有袋子，等待刷新
-                    await Task.Delay(BagScanIntervalMs, token);
+                    await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
                     continue;
                 }
 
@@ -114,24 +118,12 @@ public class MoneyBagService : IDisposable
                 var target = FindBestBagTarget(bags);
                 if (target == null)
                 {
-                    await Task.Delay(BagScanIntervalMs, token);
+                    await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
                     continue;
                 }
 
-                // 检查是否需要躲避 AOE
-                if (_plugin.Configuration.MoneyBagDodgeAoe)
-                {
-                    var danger = CheckAoeDanger(target.Position);
-                    if (danger != null)
-                    {
-                        OnLog?.Invoke($"检测到 AOE 危险，躲避中...");
-                        await DodgeAoe(danger.Value, token);
-                        continue;
-                    }
-                }
-
-                // 瞬移到袋子位置并收集
-                await TeleportAndCollectBag(target, token);
+                // 移动到袋子位置并收集
+                await MoveToAndCollectBag(target, token);
             }
 
             var success = _bagsCollected >= TargetBagCount;
@@ -150,23 +142,26 @@ public class MoneyBagService : IDisposable
         catch (OperationCanceledException)
         {
             OnLog?.Invoke("钱袋子收集已取消");
+            VnavmeshHelper.StopAutoRunning();
             return new MoneyBagResult { Success = false, ErrorMessage = "已取消", BagsCollected = _bagsCollected, TargetCount = TargetBagCount };
         }
         catch (Exception ex)
         {
             OnLog?.Invoke($"钱袋子收集异常: {ex.Message}");
+            VnavmeshHelper.StopAutoRunning();
             return new MoneyBagResult { Success = false, ErrorMessage = ex.Message, BagsCollected = _bagsCollected, TargetCount = TargetBagCount };
         }
         finally
         {
             _isActive = false;
+            VnavmeshHelper.StopAutoRunning();
             _cts?.Dispose();
             _cts = null;
         }
     }
 
     /// <summary>
-    /// 获取所有闪亮袋子，金色优先排序
+    /// 获取所有闪亮袋子，金色优先，按距离排序
     /// </summary>
     private List<(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, bool isGolden, float distance)> GetAllShiningBagsSorted()
     {
@@ -181,7 +176,9 @@ public class MoneyBagService : IDisposable
             if (string.IsNullOrEmpty(name)) continue;
 
             bool isBag = name.Contains(ShiningBagNameJP, StringComparison.OrdinalIgnoreCase) ||
-                         name.Contains(ShiningBagNameCN, StringComparison.OrdinalIgnoreCase);
+                         name.Contains(ShiningBagNameCN, StringComparison.OrdinalIgnoreCase) ||
+                         name.Contains("bag", StringComparison.OrdinalIgnoreCase) ||
+                         name.Contains("geld", StringComparison.OrdinalIgnoreCase);
             if (!isBag) continue;
 
             // 跳过已收集的
@@ -192,7 +189,12 @@ public class MoneyBagService : IDisposable
                            name.Contains("golden", StringComparison.OrdinalIgnoreCase);
 
             var dist = Vector3.Distance(player.Position, obj.Position);
-            result.Add((obj, isGolden, dist));
+
+            // 只考虑收集范围内的袋子
+            if (dist < _plugin.Configuration.MoneyBagCollectRange)
+            {
+                result.Add((obj, isGolden, dist));
+            }
         }
 
         // 金色袋子优先，然后按距离排序
@@ -214,162 +216,156 @@ public class MoneyBagService : IDisposable
     {
         if (bags.Count == 0) return null;
 
-        // 优先金色袋子（3倍计数）
-        var golden = bags.FirstOrDefault(b => b.isGolden && b.distance < _plugin.Configuration.MoneyBagCollectRange);
+        // 优先最近的金色袋子
+        var golden = bags.FirstOrDefault(b => b.isGolden);
         if (golden.bag != null)
         {
-            OnLog?.Invoke($"优先金色袋子 (距离 {golden.distance:F1}m)");
+            if (_lastTargetPos != golden.bag.Position)
+            {
+                OnLog?.Invoke($"目标金色袋子 (距离 {golden.distance:F1}m)");
+                _lastTargetPos = golden.bag.Position;
+            }
             return golden.bag;
         }
 
-        // 最近的有效袋子
-        var nearest = bags.FirstOrDefault(b => b.distance < _plugin.Configuration.MoneyBagCollectRange);
+        // 最近的普通袋子
+        var nearest = bags[0];
+        if (_lastTargetPos != nearest.bag.Position)
+        {
+            _lastTargetPos = nearest.bag.Position;
+        }
         return nearest.bag;
     }
 
     /// <summary>
-    /// 瞬移到袋子位置并收集
+    /// 移动到袋子位置并收集
     /// </summary>
-    private async Task TeleportAndCollectBag(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, CancellationToken token)
-    {
-        try
-        {
-            // 使用瞬移到袋子位置
-            // 这是 TP 钱袋子的核心功能 - 通过修改玩家位置实现快速移动
-            TeleportToPositionInternal(bag.Position);
-
-            // 等待一小段时间让游戏处理交互
-            await Task.Delay(50, token);
-
-            // 尝试交互袋子
-            if (GameObjectHelper.IsInInteractRange(bag, BagInteractRange))
-            {
-                GameObjectHelper.InteractWithObject(bag);
-                _collectedBagIds.Add(bag.GameObjectId);
-
-                // 金色袋子算3个
-                var name = bag.Name.ToString();
-                var count = name.Contains("金") ? 3 : 1;
-                _bagsCollected += count;
-
-                OnLog?.Invoke($"收集袋子 ({_bagsCollected}/{TargetBagCount})" + (count > 1 ? " [金色x3]" : ""));
-                OnBagCollected?.Invoke(_bagsCollected, TargetBagCount);
-                OnBagCountChanged?.Invoke(_bagsCollected);
-            }
-
-            await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
-        }
-        catch (Exception ex)
-        {
-            OnLog?.Invoke($"收集袋子异常: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 检查 AOE 危险区域
-    /// </summary>
-    private Vector3? CheckAoeDanger(Vector3 targetPos)
-    {
-        var player = Plugin.ObjectTable.LocalPlayer;
-        if (player == null) return null;
-
-        // 检查目标位置附近是否有 AOE 危险
-        // 通过检测施法中的敌人或地面效果
-        foreach (var obj in Plugin.ObjectTable)
-        {
-            if (obj == null) continue;
-            if (obj.ObjectKind != Dalamud.Game.ClientState.Objects.Enums.ObjectKind.BattleNpc) continue;
-
-            // 检查敌人是否正在施放直线范围攻击
-            // 这里需要检测敌人的 cast 信息
-            var distToTarget = Vector3.Distance(obj.Position, targetPos);
-            if (distToTarget < AoeDangerRange)
-            {
-                // 检测敌人面朝方向是否指向目标
-                // 如果是直线攻击，需要判断是否在攻击路径上
-                return obj.Position; // 返回危险源位置
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// 躲避 AOE
-    /// </summary>
-    private async Task DodgeAoe(Vector3 dangerSource, CancellationToken token)
-    {
-        var player = Plugin.ObjectTable.LocalPlayer;
-        if (player == null) return;
-
-        // 计算远离危险源的安全位置
-        var direction = Vector3.Normalize(player.Position - dangerSource);
-        if (direction == Vector3.Zero)
-            direction = new Vector3(1, 0, 0);
-
-        var safePos = player.Position + direction * (AoeDangerRange + 3.0f);
-        // 保持 Y 坐标不变
-        safePos.Y = player.Position.Y;
-
-        OnLog?.Invoke($"躲避到安全位置 ({safePos.X:F1}, {safePos.Z:F1})");
-        TeleportToPositionInternal(safePos);
-
-        await Task.Delay(200, token);
-    }
-
-    /// <summary>
-    /// 内部瞬移方法 - 修改玩家位置
-    /// </summary>
-    private unsafe void TeleportToPositionInternal(Vector3 position)
+    private async Task MoveToAndCollectBag(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, CancellationToken token)
     {
         try
         {
             var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null) return;
 
-            // 获取游戏内部的 Player 对象指针
-            var playerObj = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)player.Address;
-            if (playerObj == null) return;
+            var distance = Vector3.Distance(player.Position, bag.Position);
 
-            // 修改位置
-            playerObj->SetPosition(position.X, position.Y, position.Z);
+            // 如果已经在交互范围内，直接交互
+            if (distance <= BagInteractRange + 1.0f)
+            {
+                TryCollectBag(bag);
+                await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
+                return;
+            }
+
+            // 使用 vnavmesh 导航到袋子位置
+            if (VnavmeshHelper.IsAvailable())
+            {
+                // 检查是否已经在导航到这个目标
+                if (!VnavmeshHelper.IsAutoRunning() || _lastTargetPos != bag.Position)
+                {
+                    VnavmeshHelper.PathfindAndMoveTo(bag.Position);
+                }
+
+                // 等待到达或超时（快速移动模式，最多等2秒）
+                var waitStart = DateTime.Now;
+                var maxWait = TimeSpan.FromSeconds(2.5);
+
+                while ((DateTime.Now - waitStart) < maxWait)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    player = Plugin.ObjectTable.LocalPlayer;
+                    if (player == null)
+                    {
+                        await Task.Delay(50, token);
+                        continue;
+                    }
+
+                    var currentDist = Vector3.Distance(player.Position, bag.Position);
+                    if (currentDist <= BagInteractRange + 1.0f)
+                    {
+                        // 到达了，收集
+                        VnavmeshHelper.StopAutoRunning();
+                        TryCollectBag(bag);
+                        return;
+                    }
+
+                    await Task.Delay(50, token);
+                }
+
+                // 超时还没到，尝试交互（可能很近了）
+                VnavmeshHelper.StopAutoRunning();
+                TryCollectBag(bag);
+            }
+            else
+            {
+                // vnavmesh 不可用，尝试直接交互（可能在范围内）
+                TryCollectBag(bag);
+            }
+
+            await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
         }
         catch (Exception ex)
         {
-            OnLog?.Invoke($"瞬移失败: {ex.Message}");
+            OnLog?.Invoke($"移动收集袋子异常: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Framework 更新回调 - 用于实时检测
+    /// 尝试收集袋子
+    /// </summary>
+    private void TryCollectBag(Dalamud.Game.ClientState.Objects.Types.IGameObject bag)
+    {
+        try
+        {
+            if (_collectedBagIds.Contains(bag.GameObjectId)) return;
+
+            if (GameObjectHelper.IsInInteractRange(bag, BagInteractRange + 1.0f))
+            {
+                GameObjectHelper.InteractWithObject(bag);
+                _collectedBagIds.Add(bag.GameObjectId);
+
+                var name = bag.Name.ToString();
+                var count = name.Contains("金") || name.Contains("Gold") || name.Contains("golden") ? 3 : 1;
+                _bagsCollected += count;
+
+                OnLog?.Invoke($"收集袋子 ({_bagsCollected}/{TargetBagCount})" + (count > 1 ? " [金色x3]" : ""));
+                OnBagCollected?.Invoke(_bagsCollected, TargetBagCount);
+                OnBagCountChanged?.Invoke(_bagsCollected);
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"收集袋子失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Framework 更新回调 - 用于实时检测和超时
     /// </summary>
     private void OnFrameworkUpdate(IFramework framework)
     {
         if (!_isActive) return;
 
-        // 检查是否仍在奖励房内
+        // 检查时间
         if (_roomStartTime.HasValue)
         {
             var elapsed = (DateTime.Now - _roomStartTime.Value).TotalSeconds;
             if (elapsed >= BonusRoomTimeLimitSec)
             {
-                OnLog?.Invoke("时间到，停止收集");
-                _cts?.Cancel();
-                return;
+                if (_cts != null && !_cts.IsCancellationRequested)
+                {
+                    OnLog?.Invoke("时间到，停止收集");
+                    _cts.Cancel();
+                }
             }
         }
-
-        // 检查是否在洞内（或被踢出）
-        var player = Plugin.ObjectTable.LocalPlayer;
-        if (player == null) return;
-
-        // 检查是否还有袋子在刷新
-        // 如果连续多次扫描都没有袋子且时间剩余较多，可能还在战斗阶段
     }
 
     public void Cancel()
     {
         _cts?.Cancel();
+        VnavmeshHelper.StopAutoRunning();
         _isActive = false;
     }
 

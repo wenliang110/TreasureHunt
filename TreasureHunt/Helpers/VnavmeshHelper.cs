@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Threading.Tasks;
 
 namespace TreasureHunt.Helpers;
 
@@ -24,9 +25,9 @@ public static class VnavmeshHelper
     {
         try
         {
-            var sub = Plugin.PluginInterface.GetIpcSubscriber<Vector3, bool, bool>(
+            var sub = Plugin.PluginInterface.GetIpcSubscriber<Vector3, bool, Task<bool>>(
                 $"{VnavmeshLabel}.SimpleMove.PathfindAndMoveTo");
-            return sub.InvokeFunc(destination, fly);
+            return sub.InvokeFunc(destination, fly).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -36,6 +37,42 @@ public static class VnavmeshHelper
     }
 
     public static bool IsAutoRunning()
+    {
+        try
+        {
+            // 优先使用 Path.IsRunning 判断是否正在移动
+            var pathRunningSub = Plugin.PluginInterface.GetIpcSubscriber<bool>(
+                $"{VnavmeshLabel}.Path.IsRunning");
+            bool isPathRunning = pathRunningSub.InvokeFunc();
+
+            // 同时检查 SimpleMove.PathfindInProgress 作为补充
+            var pathfindSub = Plugin.PluginInterface.GetIpcSubscriber<bool>(
+                $"{VnavmeshLabel}.SimpleMove.PathfindInProgress");
+            bool isPathfindInProgress = pathfindSub.InvokeFunc();
+
+            return isPathRunning || isPathfindInProgress;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool IsPathRunning()
+    {
+        try
+        {
+            var sub = Plugin.PluginInterface.GetIpcSubscriber<bool>(
+                $"{VnavmeshLabel}.Path.IsRunning");
+            return sub.InvokeFunc();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool PathfindInProgress()
     {
         try
         {
@@ -53,8 +90,13 @@ public static class VnavmeshHelper
     {
         try
         {
-            var sub = Plugin.PluginInterface.GetIpcSubscriber<object>($"{VnavmeshLabel}.Path.Stop");
-            sub.InvokeAction();
+            // 停止 Path 移动
+            var pathStopSub = Plugin.PluginInterface.GetIpcSubscriber<object>($"{VnavmeshLabel}.Path.Stop");
+            pathStopSub.InvokeAction();
+
+            // 同时停止 SimpleMove
+            var simpleMoveStopSub = Plugin.PluginInterface.GetIpcSubscriber<object>($"{VnavmeshLabel}.SimpleMove.Stop");
+            simpleMoveStopSub.InvokeAction();
         }
         catch (Exception ex)
         {

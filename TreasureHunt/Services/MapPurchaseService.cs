@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState.Objects.Enums;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
@@ -45,6 +46,14 @@ public class MapPurchaseService : IDisposable
     // 交易板搜索关键字 (国服陈旧的卡冈图亚革地图)
     private const string SearchKeywordCN = "陈旧的卡冈图亚革地图";
     private const string SearchKeywordEN = "Timeworn Gargantuaskin Map";
+
+    // 市场布告板相关名称关键词
+    private static readonly string[] MarketBoardKeywords = new[]
+    {
+        "市场布告板", "市场", "布告板", "交易板",
+        "Market Board", "Market", "Retainer Bell",
+        "市場", "掲示板", "リテイナーベル"
+    };
 
     public event Action<PurchaseState>? StateChanged;
     public event Action<string>? OnLog;
@@ -125,18 +134,15 @@ public class MapPurchaseService : IDisposable
         State = PurchaseState.Idle;
     }
 
+    /// <summary>
+    /// 打开交易板：寻路到最近的市场布告板 → 交互打开
+    /// </summary>
     private async Task<bool> OpenMarketBoard(CancellationToken token)
     {
         try
         {
             // 检查交易板是否已打开
-            bool alreadyOpen;
-            unsafe
-            {
-                var mbAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.ItemSearch);
-                alreadyOpen = mbAgent != null && mbAgent->IsAgentActive();
-            }
-            if (alreadyOpen)
+            if (IsMarketBoardOpen())
             {
                 OnLog?.Invoke("交易板已打开");
                 return true;
@@ -149,6 +155,8 @@ public class MapPurchaseService : IDisposable
                 OnLog?.Invoke("当前区域未找到交易板，请前往主城使用");
                 return false;
             }
+
+            OnLog?.Invoke($"找到交易板: {mbNpc.Name}");
 
             // 检查距离，远的话用 vnavmesh 寻路
             var player = Plugin.ObjectTable.LocalPlayer;
@@ -169,26 +177,53 @@ public class MapPurchaseService : IDisposable
                     return false;
                 }
 
-                VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
+                var success = VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
+                if (!success)
+                {
+                    OnLog?.Invoke("vnavmesh 寻路请求失败");
+                    return false;
+                }
 
                 // 等待寻路完成
-                var timeout = TimeSpan.FromSeconds(30);
+                var timeout = TimeSpan.FromSeconds(60);
                 var startTime = DateTime.Now;
+                var lastMoveTime = DateTime.Now;
+                var lastPos = player.Position;
+
                 while ((DateTime.Now - startTime) < timeout)
                 {
                     token.ThrowIfCancellationRequested();
 
-                    if (VnavmeshHelper.IsAtDestination(mbNpc.Position, 5.0f))
+                    // 检查是否到达目标
+                    if (VnavmeshHelper.IsAtDestination(mbNpc.Position, 4.0f))
                     {
                         VnavmeshHelper.StopAutoRunning();
-                        OnLog?.Invoke("已到达交易板");
+                        OnLog?.Invoke("已到达交易板附近");
                         break;
+                    }
+
+                    // 检查是否还在移动（防卡死检测）
+                    var currentPos = Plugin.ObjectTable.LocalPlayer?.Position ?? lastPos;
+                    var moved = Vector3.Distance(currentPos, lastPos);
+                    if (moved > 0.5f)
+                    {
+                        lastMoveTime = DateTime.Now;
+                        lastPos = currentPos;
+                    }
+                    else if ((DateTime.Now - lastMoveTime).TotalSeconds > 5)
+                    {
+                        // 5秒没动了，可能卡住了，重试一次
+                        OnLog?.Invoke("移动停滞，重新寻路...");
+                        VnavmeshHelper.StopAutoRunning();
+                        await Task.Delay(500, token);
+                        VnavmeshHelper.PathfindAndMoveTo(mbNpc.Position);
+                        lastMoveTime = DateTime.Now;
                     }
 
                     await Task.Delay(500, token);
                 }
 
-                if (!VnavmeshHelper.IsAtDestination(mbNpc.Position, 5.0f))
+                if (!VnavmeshHelper.IsAtDestination(mbNpc.Position, 4.0f))
                 {
                     VnavmeshHelper.StopAutoRunning();
                     OnLog?.Invoke("寻路超时，未能到达交易板");
@@ -198,15 +233,41 @@ public class MapPurchaseService : IDisposable
                 await Task.Delay(500, token);
             }
 
-            // 打开交易板
-            unsafe
+            // 到达后，面向交易板并交互
+            OnLog?.Invoke("正在交互交易板...");
+            if (!InteractWithMarketBoard(mbNpc))
             {
-                var agentInterface = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentModule.Instance();
-                agentInterface->GetAgentByInternalId(AgentId.ItemSearch)->Show();
+                OnLog?.Invoke("交互交易板失败，尝试直接打开...");
+                // 回退：尝试直接打开 ItemSearch agent
+                unsafe
+                {
+                    var agentInterface = AgentModule.Instance();
+                    if (agentInterface != null)
+                    {
+                        var itemSearchAgent = agentInterface->GetAgentByInternalId(AgentId.ItemSearch);
+                        if (itemSearchAgent != null)
+                        {
+                            itemSearchAgent->Show();
+                        }
+                    }
+                }
             }
 
-            await Task.Delay(1000, token);
-            return true;
+            // 等待交易板窗口出现
+            var waitStart = DateTime.Now;
+            while ((DateTime.Now - waitStart) < TimeSpan.FromSeconds(5))
+            {
+                token.ThrowIfCancellationRequested();
+                if (IsMarketBoardOpen())
+                {
+                    OnLog?.Invoke("交易板已打开");
+                    return true;
+                }
+                await Task.Delay(200, token);
+            }
+
+            OnLog?.Invoke("等待交易板打开超时");
+            return IsMarketBoardOpen();
         }
         catch (Exception ex)
         {
@@ -215,6 +276,9 @@ public class MapPurchaseService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 查找最近的市场布告板对象
+    /// </summary>
     private Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestMarketBoard()
     {
         var player = Plugin.ObjectTable.LocalPlayer;
@@ -226,54 +290,153 @@ public class MapPurchaseService : IDisposable
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
-            var name = obj.Name.ToString();
-            if (name.Contains("市场", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("Market", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("交易板", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("雇员", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("retainer", StringComparison.OrdinalIgnoreCase))
+
+            // 市场布告板通常是 EventObj 类型
+            if (obj.ObjectKind != ObjectKind.EventObj &&
+                obj.ObjectKind != ObjectKind.CombatNpc &&
+                obj.ObjectKind != ObjectKind.EventNpc)
             {
-                var dist = Vector3.Distance(player.Position, obj.Position);
-                if (dist < minDistance)
+                // 也检查一些特殊类型
+                if (obj.ObjectKind != (ObjectKind)63) // 市场布告板可能是特定类型
+                    continue;
+            }
+
+            var name = obj.Name.ToString();
+            if (string.IsNullOrEmpty(name)) continue;
+
+            bool isMarketBoard = false;
+            foreach (var keyword in MarketBoardKeywords)
+            {
+                if (name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                 {
-                    minDistance = dist;
-                    nearest = obj;
+                    isMarketBoard = true;
+                    break;
+                }
+            }
+
+            if (!isMarketBoard) continue;
+
+            var dist = Vector3.Distance(player.Position, obj.Position);
+            if (dist < minDistance)
+            {
+                minDistance = dist;
+                nearest = obj;
+            }
+        }
+
+        // 如果没找到，放宽条件：搜索所有 EventObj
+        if (nearest == null)
+        {
+            foreach (var obj in Plugin.ObjectTable)
+            {
+                if (obj == null) continue;
+                if (obj.ObjectKind != ObjectKind.EventObj) continue;
+
+                var name = obj.Name.ToString();
+                if (string.IsNullOrEmpty(name)) continue;
+
+                // 更宽松的匹配
+                if (name.Contains("市場", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("市场", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("market", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("掲示", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("布告", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("board", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dist = Vector3.Distance(player.Position, obj.Position);
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        nearest = obj;
+                    }
                 }
             }
         }
+
         return nearest;
+    }
+
+    /// <summary>
+    /// 检查交易板是否已打开
+    /// </summary>
+    private bool IsMarketBoardOpen()
+    {
+        unsafe
+        {
+            // ItemSearch addon 就是交易板窗口
+            var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
+            if (addon.Address != IntPtr.Zero)
+            {
+                var atkUnitBase = (AtkUnitBase*)addon.Address;
+                return atkUnitBase->IsVisible;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 与交易板对象交互
+    /// </summary>
+    private bool InteractWithMarketBoard(Dalamud.Game.ClientState.Objects.Types.IGameObject mbObj)
+    {
+        try
+        {
+            // 先设为目标
+            GameObjectHelper.SetTarget(mbObj);
+
+            // 使用 TargetSystem 交互
+            return GameObjectHelper.InteractWithObject(mbObj);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"交互交易板失败: {ex.Message}");
+            return false;
+        }
     }
 
     private async Task<bool> SearchForMap(CancellationToken token)
     {
         try
         {
-            // 获取交易板 Addon
-            IntPtr atkPtr = IntPtr.Zero;
+            var searchKeyword = SearchKeywordCN;
+            OnLog?.Invoke($"搜索: {searchKeyword}");
+
             unsafe
             {
-                var atkUnitBase = GetMarketBoardAddon();
-                if (atkUnitBase != null)
-                    atkPtr = (IntPtr)atkUnitBase;
+                var agent = GetItemSearchAgent();
+                if (agent == null)
+                {
+                    OnLog?.Invoke("未找到 ItemSearch Agent");
+                    return false;
+                }
+
+                // 使用 Agent 的搜索方法
+                // 先获取搜索输入框并设置文本
+                var atkUnitBase = GetItemSearchAddon();
+                if (atkUnitBase == null)
+                {
+                    OnLog?.Invoke("未找到 ItemSearch 窗口");
+                    return false;
+                }
+
+                // 方法1: 直接调用 Agent 的 Search 方法
+                // 通过 FireCallback 触发搜索，参数按实际 addon 结构
+                // ItemSearch 的搜索按钮通常是 callback 0
+
+                // 先找到搜索输入框并填入文字
+                if (!SetSearchText(atkUnitBase, searchKeyword))
+                {
+                    OnLog?.Invoke("设置搜索文本失败，尝试直接搜索...");
+                }
+
+                await Task.Delay(500, token);
+
+                // 触发搜索
+                atkUnitBase->FireCallback(0, null, false);
             }
-            if (atkPtr == IntPtr.Zero)
-            {
-                OnLog?.Invoke("交易板 UI 未找到");
-                return false;
-            }
 
-            // 查找搜索输入框组件并输入搜索关键字
-            var searchKeyword = SearchKeywordCN;
-            // 使用 AtkValue 系统设置搜索文本
-            unsafe { SetMarketBoardSearchText((AtkUnitBase*)atkPtr, searchKeyword); }
-
-            await Task.Delay(1000, token);
-
-            // 触发搜索
-            unsafe { TriggerMarketBoardSearch((AtkUnitBase*)atkPtr); }
-
-            await Task.Delay(2000, token);
-            OnLog?.Invoke($"搜索完成: {searchKeyword}");
+            await Task.Delay(1500, token);
+            OnLog?.Invoke("搜索完成");
             return true;
         }
         catch (Exception ex)
@@ -287,17 +450,23 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            IntPtr atkPtr = IntPtr.Zero;
             unsafe
             {
-                var atkUnitBase = GetMarketBoardAddon();
-                if (atkUnitBase != null)
-                    atkPtr = (IntPtr)atkUnitBase;
-            }
-            if (atkPtr == IntPtr.Zero) return false;
+                var atkUnitBase = GetItemSearchAddon();
+                if (atkUnitBase == null) return false;
 
-            // 选择第一个搜索结果（藏宝图）
-            unsafe { SelectFirstSearchResult((AtkUnitBase*)atkPtr); }
+                // 选择第一个搜索结果
+                // ItemSearch 的结果列表通常通过 FireCallback 选择
+                var atkValues = stackalloc AtkValue[2];
+                atkValues[0].Type = AtkValueType.Int;
+                atkValues[0].Int = 0; // 第一个结果
+                atkValues[1].Type = AtkValueType.Int;
+                atkValues[1].Int = 0; // 列表索引
+
+                atkUnitBase->FireCallback(1, atkValues, false);
+                OnLog?.Invoke("选择第一个搜索结果");
+            }
+
             await Task.Delay(1000, token);
             return true;
         }
@@ -312,9 +481,14 @@ public class MapPurchaseService : IDisposable
     {
         await Task.Delay(500, token);
 
-        // 从交易板 UI 读取当前最低价
         var price = ReadLowestPrice();
         OnLog?.Invoke($"当前最低价格: {price}");
+
+        if (price == 0)
+        {
+            OnLog?.Invoke("未能读取价格，可能搜索无结果");
+            return (false, 0);
+        }
 
         if (price > _plugin.Configuration.MaxPurchasePrice)
         {
@@ -327,22 +501,27 @@ public class MapPurchaseService : IDisposable
     {
         try
         {
-            IntPtr atkPtr = IntPtr.Zero;
             unsafe
             {
-                var atkUnitBase = GetMarketBoardAddon();
-                if (atkUnitBase != null)
-                    atkPtr = (IntPtr)atkUnitBase;
+                var atkUnitBase = GetItemSearchAddon();
+                if (atkUnitBase == null) return false;
+
+                // 点击购买按钮
+                // ItemSearch 购买按钮的 callback 索引需要调试确认
+                // 通常购买按钮是一个特定的 callback
+                var atkValues = stackalloc AtkValue[1];
+                atkValues[0].Type = AtkValueType.Int;
+                atkValues[0].Int = 0;
+
+                atkUnitBase->FireCallback(2, atkValues, false);
+                OnLog?.Invoke("点击购买按钮");
             }
-            if (atkPtr == IntPtr.Zero) return false;
 
-            // 点击购买按钮
-            unsafe { ClickPurchaseButton((AtkUnitBase*)atkPtr); }
-            await Task.Delay(500, token);
+            await Task.Delay(800, token);
 
-            // 确认购买弹窗
+            // 确认购买弹窗 (SelectYesno)
             ConfirmPurchaseDialog();
-            await Task.Delay(500, token);
+            await Task.Delay(800, token);
 
             return true;
         }
@@ -353,13 +532,32 @@ public class MapPurchaseService : IDisposable
         }
     }
 
-    private unsafe AtkUnitBase* GetMarketBoardAddon()
+    private unsafe AtkUnitBase* GetItemSearchAddon()
     {
-        var addon = Plugin.GameGui.GetAddonByName("MarketBoard");
+        var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
+        if (addon.Address == IntPtr.Zero) return null;
         return (AtkUnitBase*)addon.Address;
     }
 
-    private unsafe void SetMarketBoardSearchText(AtkUnitBase* atkUnitBase, string text)
+    private unsafe AgentItemSearch* GetItemSearchAgent()
+    {
+        try
+        {
+            var agentModule = AgentModule.Instance();
+            if (agentModule == null) return null;
+
+            var agent = agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+            if (agent == null) return null;
+
+            return (AgentItemSearch*)agent;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private unsafe bool SetSearchText(AtkUnitBase* atkUnitBase, string text)
     {
         var uldManager = &atkUnitBase->UldManager;
         for (var i = 0; i < uldManager->NodeListCount; i++)
@@ -367,46 +565,29 @@ public class MapPurchaseService : IDisposable
             var node = uldManager->NodeList[i];
             if (node == null) continue;
 
-            // 使用 GetAsAtkComponentTextInput 安全转换
             var textInput = node->GetAsAtkComponentTextInput();
             if (textInput == null) continue;
 
-            // SetText 接受 CStringPointer
             var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
             fixed (byte* pText = bytes)
             {
                 textInput->SetText((InteropGenerator.Runtime.CStringPointer)pText);
             }
             OnLog?.Invoke($"设置搜索文本: {text}");
-            return;
+            return true;
         }
         OnLog?.Invoke("未找到搜索输入框组件");
-    }
-
-    private unsafe void TriggerMarketBoardSearch(AtkUnitBase* atkUnitBase)
-    {
-        // 通过 FireCallback 触发搜索
-        atkUnitBase->FireCallback(0, null, false);
-        OnLog?.Invoke("触发搜索");
-    }
-
-    private unsafe void SelectFirstSearchResult(AtkUnitBase* atkUnitBase)
-    {
-        // 通过 AtkUnitBase FireCallback 选择第一个搜索结果
-        var atkValues = stackalloc AtkValue[1];
-        atkValues[0].Type = AtkValueType.Int;
-        atkValues[0].Int = 0;
-        atkUnitBase->FireCallback(1, atkValues, false);
-        OnLog?.Invoke("选择第一个搜索结果");
+        return false;
     }
 
     private unsafe int ReadLowestPrice()
     {
-        // 从交易板 UI 读取价格信息
-        var atkUnitBase = GetMarketBoardAddon();
+        var atkUnitBase = GetItemSearchAddon();
         if (atkUnitBase == null) return 0;
 
+        var prices = new List<int>();
         var uldManager = &atkUnitBase->UldManager;
+
         for (var i = 0; i < uldManager->NodeListCount; i++)
         {
             var node = uldManager->NodeList[i];
@@ -415,25 +596,22 @@ public class MapPurchaseService : IDisposable
 
             var textNode = (AtkTextNode*)node;
             var text = textNode->NodeText.ToString();
-            // 价格通常为纯数字或包含逗号
-            if (text.Length > 0 && char.IsDigit(text[0]))
+            if (text.Length == 0) continue;
+
+            // 价格格式：纯数字、带逗号、带 g/G 后缀
+            var clean = text.Replace(",", "").Replace(".", "").Replace(" ", "")
+                           .Replace("g", "").Replace("G", "").Replace("Ｇ", "");
+
+            if (clean.Length > 0 && long.TryParse(clean, out var price))
             {
-                var clean = text.Replace(",", "").Replace(".", "").Replace(" ", "");
-                if (int.TryParse(clean, out var price))
-                    return price;
+                if (price > 0 && price < 100000000) // 合理范围
+                    prices.Add((int)price);
             }
         }
-        return 0;
-    }
 
-    private unsafe void ClickPurchaseButton(AtkUnitBase* atkUnitBase)
-    {
-        // 通过 AtkUnitBase FireCallback 点击购买按钮
-        var atkValues = stackalloc AtkValue[1];
-        atkValues[0].Type = AtkValueType.Int;
-        atkValues[0].Int = 0;
-        atkUnitBase->FireCallback(1, atkValues, false);
-        OnLog?.Invoke("点击购买按钮");
+        if (prices.Count == 0) return 0;
+        prices.Sort();
+        return prices[0]; // 返回最低价
     }
 
     private unsafe void ConfirmPurchaseDialog()
@@ -447,11 +625,10 @@ public class MapPurchaseService : IDisposable
         }
 
         var selectYesno = (AtkUnitBase*)addon.Address;
-        // SelectYesno 的 FireCallback 接受一个 bool: true=Yes, false=No
         var atkValues = stackalloc AtkValue[1];
         atkValues[0].Type = AtkValueType.Bool;
         atkValues[0].Byte = 1; // true = Yes
-        selectYesno->FireCallback(1, atkValues, false);
+        selectYesno->FireCallback(0, atkValues, false);
         OnLog?.Invoke("确认购买");
     }
 
