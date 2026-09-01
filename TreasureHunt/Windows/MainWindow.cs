@@ -73,29 +73,64 @@ public class MainWindow : Window, IDisposable
     private void DrawHeader()
     {
         ImGui.TextColored(new Vector4(0.85f, 0.65f, 0.0f, 1.0f), "TreasureHunt - FF14 自动挖宝插件");
-        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "Gargantuaskin (G18) → Vault Oneiron");
-        ImGui.SameLine();
-        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "| 国服 CN");
+        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "Gargantuaskin (G18) → Vault Oneiron | 国服 CN");
     }
 
     private void DrawFeatureToggles()
     {
-        ImGui.Text("功能开关");
-        ImGui.Spacing();
-
         var config = _plugin.Configuration;
 
-        DrawCheckbox("1. 不选中他人宝箱怪", ref config.AvoidOthersTreasureMonsters);
-        DrawCheckbox("2. 解读后标记位置", ref config.EnableMarkLocation);
-        DrawCheckbox("3. 一键买图解读", ref config.EnableOneClickBuyDecipher);
-        DrawCheckbox("4. 自动传送", ref config.EnableAutoTeleport);
-        DrawCheckbox("5. TP 钱袋子自动收集", ref config.EnableMoneyBagCollection);
-        ImGui.Indent();
-        ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1.0f), $"已收集: {_plugin.MoneyBagService.BagsCollected}/100 | 剩余: {_plugin.MoneyBagService.RemainingTime}s");
-        ImGui.Unindent();
+        // 可折叠区块标题 (匹配参考图风格)
+        ImGui.TextColored(new Vector4(0.4f, 0.6f, 0.3f, 1.0f), "▼ 自动挖宝");
+        ImGui.Separator();
+        ImGui.TextWrapped("自动购买藏宝图，收纳并解读藏宝图，可在解读后标记位置并且传送到最近的水晶。");
+        ImGui.Spacing();
+
+        // 功能开关 (与参考图顺序一致)
+        DrawCheckbox("不选中他人宝箱怪", ref config.AvoidOthersTreasureMonsters);
+        DrawCheckbox("解读后标记位置", ref config.EnableMarkLocation);
+        DrawCheckbox("一键买图解读", ref config.EnableOneClickBuyDecipher);
+        DrawCheckbox("无限挖掘", ref config.EnableUnlimitedDigging);
+        DrawCheckbox("自动传送", ref config.EnableAutoTeleport);
+        DrawCheckbox("TP 钱袋", ref config.EnableMoneyBagCollection);
+
+        // TP 钱袋子状态
+        if (config.EnableMoneyBagCollection)
+        {
+            ImGui.Indent();
+            ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1.0f),
+                $"已收集: {_plugin.MoneyBagService.BagsCollected}/100 | 剩余: {_plugin.MoneyBagService.RemainingTime}s");
+            ImGui.Unindent();
+        }
 
         ImGui.Spacing();
-        DrawCheckbox("全自动模式 (买图→解读→传送→导航→挖掘→战斗→开箱→进洞→钱袋)", ref config.EnableFullAutoMode);
+
+        // 输入框: 价格限制 + 藏宝图ID (匹配参考图)
+        ImGui.Columns(2, null, false);
+        var priceVal = (int)config.MaxPurchasePrice;
+        ImGui.Text("价格限制:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(80);
+        if (ImGui.InputInt("##price", ref priceVal, 1000, 10000))
+        {
+            config.MaxPurchasePrice = priceVal;
+            config.Save();
+        }
+
+        ImGui.NextColumn();
+        var mapId = (int)config.TreasureMapItemId;
+        ImGui.Text("藏宝图ID:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(80);
+        if (ImGui.InputInt("##mapid", ref mapId, 0, 0))
+        {
+            config.TreasureMapItemId = (uint)mapId;
+            config.Save();
+        }
+        ImGui.Columns(1);
+
+        ImGui.Spacing();
+        DrawCheckbox("全自动模式", ref config.EnableFullAutoMode);
     }
 
     private void DrawCheckbox(string label, ref bool value)
@@ -110,57 +145,67 @@ public class MainWindow : Window, IDisposable
     private void DrawActionButtons()
     {
         var isRunning = _plugin.Orchestrator.IsRunning;
-        var buttonSize = new Vector2(-1, 30);
+        var buttonSize = new Vector2(-1, 32);
 
+        // 开始/停止按钮 (并排，匹配参考图)
         if (!isRunning)
         {
-            if (ImGui.Button("启动全自动挖宝", buttonSize))
+            ImGui.Columns(2, null, false);
+            if (ImGui.Button("开始", new Vector2(-1, 32)))
             {
                 _logLines.Clear();
-                _ = _plugin.Orchestrator.RunFullAutoAsync();
+                if (_plugin.Configuration.EnableFullAutoMode)
+                    _ = _plugin.Orchestrator.RunFullAutoAsync();
+                else if (_plugin.Configuration.EnableOneClickBuyDecipher)
+                    _ = _plugin.Orchestrator.OneClickBuyAndDecipherAsync();
             }
+            ImGui.NextColumn();
+            ImGui.BeginDisabled();
+            ImGui.Button("停止", new Vector2(-1, 32));
+            ImGui.EndDisabled();
+            ImGui.Columns(1);
 
             ImGui.Spacing();
 
-            if (_plugin.Configuration.EnableOneClickBuyDecipher)
-            {
-                if (ImGui.Button("一键买图+解读+传送", buttonSize))
-                {
-                    _logLines.Clear();
-                    _ = _plugin.Orchestrator.OneClickBuyAndDecipherAsync();
-                }
-                ImGui.Spacing();
-            }
-
             // 单独功能按钮
-            ImGui.Columns(2, null, false);
-            if (ImGui.Button("单独: 买图", new Vector2(-1, 25)))
+            ImGui.Columns(3, null, false);
+            if (ImGui.Button("买图", new Vector2(-1, 25)))
             {
                 _ = _plugin.MapPurchaseService.PurchaseMapAsync();
             }
             ImGui.NextColumn();
-            if (ImGui.Button("单独: 解读", new Vector2(-1, 25)))
+            if (ImGui.Button("解读", new Vector2(-1, 25)))
             {
                 _ = _plugin.MapDecipherService.DecipherMapAsync();
             }
             ImGui.NextColumn();
-            if (ImGui.Button("单独: 钱袋子", new Vector2(-1, 25)))
+            if (ImGui.Button("钱袋子", new Vector2(-1, 25)))
             {
                 _ = _plugin.MoneyBagService.StartCollectionAsync();
             }
             ImGui.NextColumn();
-            if (ImGui.Button("打开设置", new Vector2(-1, 25)))
+            if (ImGui.Button("设置", new Vector2(-1, 25)))
             {
                 _plugin.ToggleConfigUi();
             }
             ImGui.Columns(1);
+
+            // 命令参考
+            ImGui.Spacing();
+            ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1.0f), "/thunt <宝图ID> <价格限制>");
         }
         else
         {
-            if (ImGui.Button("取消运行", buttonSize))
+            ImGui.Columns(2, null, false);
+            ImGui.BeginDisabled();
+            ImGui.Button("开始", new Vector2(-1, 32));
+            ImGui.EndDisabled();
+            ImGui.NextColumn();
+            if (ImGui.Button("停止", new Vector2(-1, 32)))
             {
                 _plugin.Orchestrator.Cancel();
             }
+            ImGui.Columns(1);
         }
     }
 

@@ -8,19 +8,21 @@ public class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
 
-    // 核心功能开关
-    public bool EnableAutoPurchase { get; set; } = false;
-    public bool EnableMarkLocation { get; set; } = true;
-    public bool EnableOneClickBuyDecipher { get; set; } = false;
-    public bool EnableAutoTeleport { get; set; } = true;
-    public bool EnableMoneyBagCollection { get; set; } = true;
-    public bool AvoidOthersTreasureMonsters { get; set; } = true;
+    // 核心功能开关 (与参考图一致)
+    public bool AvoidOthersTreasureMonsters { get; set; } = true;   // 1. 不选中他人宝箱怪
+    public bool EnableMarkLocation { get; set; } = true;             // 2. 解读后标记位置
+    public bool EnableOneClickBuyDecipher { get; set; } = false;     // 3. 一键买图解读
+    public bool EnableUnlimitedDigging { get; set; } = false;        // 4. 无限挖掘
+    public bool EnableAutoTeleport { get; set; } = true;             // 5. 自动传送
+    public bool EnableMoneyBagCollection { get; set; } = false;      // 6. TP 钱袋 (默认关)
 
     // 全流程自动化
     public bool EnableFullAutoMode { get; set; } = false;
+    public bool EnableAutoPurchase { get; set; } = false;
 
     // 交易板购买设置
-    public int MaxPurchasePrice { get; set; } = 50000;
+    public int MaxPurchasePrice { get; set; } = 50000;   // 价格限制
+    public uint TreasureMapItemId { get; set; } = 43885; // 藏宝图ID (0=自动检测G18, 默认43885=Gargantuaskin)
     public int MaxPurchaseQuantity { get; set; } = 1;
 
     // 传送设置
