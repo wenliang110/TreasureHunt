@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.1.0.4 - 修复vnavmesh IPC方法名错误导致寻路不工作\nv0.1.0.3 - 买图时自动用vnavmesh寻路到交易板\nv0.1.0.2 - 修复价格限制输入框不可见",
-    "AssemblyVersion": "0.1.0.4",
+    "Changelog": "v0.1.1.0 - 修复vnavmesh IPC返回类型不匹配导致寻路失效的核心Bug；重写交易板寻路和交互逻辑；重构传送系统和导航服务，添加防卡死自动重试；改进钱袋子收集使用vnavmesh导航\nv0.1.0.4 - 修复vnavmesh IPC方法名错误导致寻路不工作\nv0.1.0.3 - 买图时自动用vnavmesh寻路到交易板\nv0.1.0.2 - 修复价格限制输入框不可见",
+    "AssemblyVersion": "0.1.1.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
     "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/latest/download/TreasureHunt.zip",
     "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/latest/download/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788255600"
+    "LastUpdate": "1788328600"
   }
 ]
