@@ -3,11 +3,13 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*.*'
   workflow_dispatch:
 
 jobs:
-  build:
+  release:
+    permissions:
+      contents: write
     runs-on: windows-latest
 
     steps:
@@ -17,24 +19,35 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.x'
 
-    - name: Build plugin
-      run: dotnet build TreasureHunt/TreasureHunt.csproj -c Release -o ./output
-
-    - name: Create release zip
+    - name: Download Dalamud Hooks
       shell: pwsh
       run: |
-        $zipPath = "TreasureHunt.zip"
-        Compress-Archive -Path "./output/TreasureHunt.dll","./output/Data" -DestinationPath $zipPath
-        Write-Host "Created $zipPath"
+        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+        Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncherCN\addon\Hooks\dev"
+
+    - name: Restore
+      run: dotnet restore TreasureHunt/TreasureHunt.csproj
+
+    - name: Build
+      run: dotnet build --no-restore -c Release TreasureHunt/TreasureHunt.csproj --output ./build
+
+    - name: Cleanup output
+      shell: pwsh
+      run: |
+        Get-ChildItem ./build/* -Exclude TreasureHunt.* | Remove-Item -Force -Recurse
+
+    - name: Create plugin zip
+      shell: pwsh
+      run: |
+        Compress-Archive -Path ./build/TreasureHunt.* -DestinationPath TreasureHunt.zip
 
     - name: Extract version from tag
       id: version
       shell: pwsh
       run: |
         $tag = "${{ github.ref_name }}"
-        if ($tag -eq "") { $tag = "v0.0.0.0" }
         $version = $tag.TrimStart('v')
         Write-Host "Version: $version"
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT

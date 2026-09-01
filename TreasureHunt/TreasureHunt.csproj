@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+<Project Sdk="Dalamud.CN.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>0.1.0.0</Version>
     <Author>wenliang110</Author>
     <Name>TreasureHunt</Name>
     <Punchline>FF14 自动挖宝插件 - 藏宝图全流程自动化</Punchline>
-    <Description>支持 Gargantuaskin (G18) 藏宝图自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。</Description>
+    <Description>支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。</Description>
     <RepoUrl>https://github.com/wenliang110/TreasureHunt</RepoUrl>
     <Tags>treasure;map;hunt;auto;dig;teleport;moneybag</Tags>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +19,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="TreasureHunt.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Data\gargantuaskin_locations.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
