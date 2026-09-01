@@ -21,7 +21,7 @@ public static unsafe class GameObjectHelper
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
-            if (obj.DataId != dataId) continue;
+            if (obj.BaseId != dataId) continue;
 
             var dist = Vector3.Distance(pos, obj.Position);
             if (dist < minDist)
@@ -60,7 +60,7 @@ public static unsafe class GameObjectHelper
         foreach (var obj in Plugin.ObjectTable)
         {
             if (obj == null) continue;
-            if (obj.DataId == dataId)
+            if (obj.BaseId == dataId)
                 results.Add(obj);
         }
         return results;

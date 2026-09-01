@@ -24,7 +24,7 @@ public static unsafe class AetheryteHelper
 
             var name = aetheryte.Name.ToString();
             var pos = aetheryte.Position;
-            result.Add((aetheryte.DataId, name, pos));
+            result.Add((aetheryte.BaseId, name, pos));
         }
 
         result.Sort((a, b) =>
