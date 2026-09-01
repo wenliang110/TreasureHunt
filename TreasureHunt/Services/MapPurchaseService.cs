@@ -160,19 +160,46 @@ public class MapPurchaseService : IDisposable
             {
                 OnLog?.Invoke("当前区域无交易板，尝试传送到主城...");
 
-                // 用名称查找已解锁的主城水晶（比硬编码 ID 更可靠）
-                var cityNames = new[] { "利姆萨", "格里达尼亚", "乌尔达哈" };
+                // 已知主城水晶 ID（交易板就在附近）
+                // 利姆萨下层甲板=2, 格里达尼亚旧街=9, 乌尔达哈=1
+                // 利姆萨上层甲板=8, 新格里达尼亚=66, 乌尔达哈商业区=12
+                var cityAetherytes = new (uint id, string name)[]
+                {
+                    (2, "利姆萨·罗敏萨下层甲板"),
+                    (9, "格里达尼亚旧街"),
+                    (1, "乌尔达哈"),
+                    (8, "利姆萨·罗敏萨上层甲板"),
+                    (66, "新格里达尼亚"),
+                    (12, "乌尔达哈商业区"),
+                };
+
                 uint teleportTarget = 0;
                 string cityName = "";
 
-                foreach (var city in cityNames)
+                // 优先用已知 ID 检查是否已解锁
+                foreach (var (id, name) in cityAetherytes)
                 {
-                    var id = AetheryteHelper.FindAetheryteIdByName(city);
-                    if (id != 0)
+                    if (AetheryteHelper.IsAetheryteUnlocked(id))
                     {
                         teleportTarget = id;
-                        cityName = city;
+                        cityName = name;
                         break;
+                    }
+                }
+
+                // 如果已知 ID 都没解锁，回退到名称搜索
+                if (teleportTarget == 0)
+                {
+                    var searchNames = new[] { "利姆萨", "格里达尼亚", "乌尔达哈" };
+                    foreach (var search in searchNames)
+                    {
+                        var id = AetheryteHelper.FindAetheryteIdByName(search);
+                        if (id != 0)
+                        {
+                            teleportTarget = id;
+                            cityName = search;
+                            break;
+                        }
                     }
                 }
 
