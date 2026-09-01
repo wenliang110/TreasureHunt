@@ -41,7 +41,7 @@ public class TreasureHuntOrchestrator : IDisposable
 
     /// <summary>
     /// 启动全自动挖宝流程
-    /// 新流程：先传送到挖宝地图 → PDR 远程买图 → 解读 → 导航 → 挖掘 → 进洞
+    /// 新流程：先买图 → 解读 → 传送到G18对应晶石 → 导航 → 挖掘 → 进洞
     /// </summary>
     public async Task<OrchestratorResult> RunFullAutoAsync()
     {
@@ -269,7 +269,7 @@ public class TreasureHuntOrchestrator : IDisposable
 
     /// <summary>
     /// 一键买图+解读
-    /// 新流程：先传送到挖宝地图 → PDR 远程买图 → 解读
+    /// 流程：先买图(PDR优先) → 解读 → 传送到G18对应晶石
     /// </summary>
     public async Task<OrchestratorResult> OneClickBuyAndDecipherAsync()
     {
@@ -279,54 +279,6 @@ public class TreasureHuntOrchestrator : IDisposable
 
         try
         {
-            // 先传送到挖宝地图
-            if (_plugin.Configuration.EnableAutoTeleport)
-            {
-                var currentTerritory = Plugin.ClientState.TerritoryType;
-                if (currentTerritory != TreasureMapConstants.GargantuaskinTerritoryId)
-                {
-                    _state.SetPhase(TreasureHuntPhase.Teleporting, "传送到挖宝地图...");
-                    PhaseChanged?.Invoke(_state.Phase);
-
-                    // 从已解锁水晶列表中找目标地图的水晶（优先记忆>火>风）
-                    var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
-                    var g18Aetherytes = unlocked.FindAll(a => a.territoryId == TreasureMapConstants.GargantuaskinTerritoryId);
-
-                    uint aetheryteId = 0;
-                    string aetheryteName = "";
-                    var memKeywords = new[] { "记忆", "忆", "Memoris", "Memory" };
-                    var fireKeywords = new[] { "火", "Fire" };
-                    var windKeywords = new[] { "风", "Wind" };
-
-                    foreach (var kw in memKeywords)
-                    {
-                        var found = g18Aetherytes.Find(a => a.name.Contains(kw, StringComparison.OrdinalIgnoreCase));
-                        if (found.aetheryteId != 0) { aetheryteId = found.aetheryteId; aetheryteName = found.name; break; }
-                    }
-                    if (aetheryteId == 0) foreach (var kw in fireKeywords)
-                    {
-                        var found = g18Aetherytes.Find(a => a.name.Contains(kw, StringComparison.OrdinalIgnoreCase));
-                        if (found.aetheryteId != 0) { aetheryteId = found.aetheryteId; aetheryteName = found.name; break; }
-                    }
-                    if (aetheryteId == 0) foreach (var kw in windKeywords)
-                    {
-                        var found = g18Aetherytes.Find(a => a.name.Contains(kw, StringComparison.OrdinalIgnoreCase));
-                        if (found.aetheryteId != 0) { aetheryteId = found.aetheryteId; aetheryteName = found.name; break; }
-                    }
-                    if (aetheryteId == 0 && g18Aetherytes.Count > 0)
-                    {
-                        aetheryteId = g18Aetherytes[0].aetheryteId;
-                        aetheryteName = g18Aetherytes[0].name;
-                    }
-
-                    if (aetheryteId != 0)
-                    {
-                        OnLog?.Invoke($"传送到挖宝地图: {aetheryteName} (ID={aetheryteId})");
-                        await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
-                    }
-                }
-            }
-
             // 购买
             _state.SetPhase(TreasureHuntPhase.PurchasingMap, "一键买图: 购买中...");
             PhaseChanged?.Invoke(_state.Phase);
@@ -362,7 +314,7 @@ public class TreasureHuntOrchestrator : IDisposable
                 _state.SetPhase(TreasureHuntPhase.Teleporting, "一键买图: 传送中...");
                 PhaseChanged?.Invoke(_state.Phase);
 
-                var aetheryteId = MapLocationDatabase.ResolveAetheryteId(decipherResult.MatchedLocation);
+                var aetheryteId = FindG18AetheryteByName(decipherResult.MatchedLocation.NearestAetheryteNameCN);
                 if (aetheryteId != 0)
                 {
                     OnLog?.Invoke($"传送到晶石: {decipherResult.MatchedLocation.NearestAetheryteNameCN} (ID={aetheryteId})");
@@ -370,7 +322,14 @@ public class TreasureHuntOrchestrator : IDisposable
                 }
                 else
                 {
-                    OnLog?.Invoke($"无法解析晶石 ID: {decipherResult.MatchedLocation.NearestAetheryteNameCN}");
+                    OnLog?.Invoke($"无法找到晶石: {decipherResult.MatchedLocation.NearestAetheryteNameCN}");
+                    // 回退：找任意一个地场节点
+                    var fallbackId = FindAnyG18Aetheryte();
+                    if (fallbackId != 0)
+                    {
+                        OnLog?.Invoke($"回退传送到任意地场节点 (ID={fallbackId})");
+                        await _plugin.NavigationService.TeleportOnlyAsync(fallbackId);
+                    }
                 }
             }
 
