@@ -88,9 +88,9 @@ public class MapPurchaseService : IDisposable
             State = PurchaseState.OpeningMarketBoard;
 
             // 优先使用 PDR 远程交易板（无需跑到主城）
-            var pdrAvailable = PdrMarketHelper.IsAvailable();
-            var usePdr = pdrAvailable && _plugin.Configuration.UsePdrMarket;
-            OnLog?.Invoke($"PDR 检测: 可用={pdrAvailable}, 配置启用={_plugin.Configuration.UsePdrMarket}, 将使用={usePdr}");
+            // 不检测程序集，直接试命令，打不开就回退
+            var usePdr = _plugin.Configuration.UsePdrMarket;
+            OnLog?.Invoke($"PDR 模式: 配置启用={usePdr}，将尝试 /pdr market 命令");
 
             if (usePdr)
             {
@@ -159,6 +159,7 @@ public class MapPurchaseService : IDisposable
     /// <summary>
     /// 使用 PDR (更好的市场布告板) 打开远程交易板
     /// 通过 /pdr market &lt;物品ID&gt; 直接打开，无需跑到主城
+    /// 打开失败返回 false，调用方负责回退到传统方式
     /// </summary>
     private async Task<bool> OpenMarketBoardPdr(CancellationToken token)
     {
@@ -173,18 +174,14 @@ public class MapPurchaseService : IDisposable
             var itemId = _plugin.Configuration.TreasureMapItemId;
             OnLog?.Invoke($"执行 /pdr market {itemId} ...");
 
-            if (!PdrMarketHelper.OpenMarket(itemId))
-            {
-                OnLog?.Invoke("PDR 命令执行失败");
-                return false;
-            }
+            PdrMarketHelper.OpenMarket(itemId);
 
-            // 等待交易板窗口出现
+            // 等待交易板窗口出现（PDR 可能复用 ItemSearch，也可能用自定义窗口名）
             var waitStart = DateTime.Now;
             while ((DateTime.Now - waitStart).TotalSeconds < 8)
             {
                 token.ThrowIfCancellationRequested();
-                if (IsMarketBoardOpen())
+                if (PdrMarketHelper.IsMarketOpen() || IsMarketBoardOpen())
                 {
                     OnLog?.Invoke("PDR 交易板已打开");
                     return true;
@@ -192,8 +189,8 @@ public class MapPurchaseService : IDisposable
                 await Task.Delay(300, token);
             }
 
-            OnLog?.Invoke("等待 PDR 交易板打开超时");
-            return IsMarketBoardOpen();
+            OnLog?.Invoke("PDR 交易板未打开（可能未安装插件），将回退到传统方式");
+            return false;
         }
         catch (OperationCanceledException)
         {
