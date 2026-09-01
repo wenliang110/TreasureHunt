@@ -13,8 +13,8 @@ public class TreasureMapData
 
 public static class TreasureMapConstants
 {
-    public const uint GargantuaskinItemId = 43885;
-    public const string GargantuaskinItemName = "古旧的巨兽皮地图";
+    public const uint GargantuaskinItemId = 46185;
+    public const string GargantuaskinItemName = "陈旧的卡冈图亚革地图";
     public const string GargantuaskinItemNameEN = "Timeworn Gargantuaskin Map";
     public const uint GargantuaskinGrade = 18;
     public const uint GargantuaskinLevel = 100;

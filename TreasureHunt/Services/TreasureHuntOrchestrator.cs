@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Numerics;
+using Dalamud.Utility;
 using TreasureHunt.Helpers;
 using TreasureHunt.Models;
 
@@ -101,27 +102,43 @@ public class TreasureHuntOrchestrator : IDisposable
                 _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送...");
                 PhaseChanged?.Invoke(_state.Phase);
 
-                // 根据匹配的点位确定最近晶石
                 if (matchedLoc != null)
                 {
-                    OnLog?.Invoke($"最近晶石: {matchedLoc.NearestAetheryteNameCN}");
-                    // 使用 Teleporter 或 AetheryteHelper 传送
-                    // 这里需要根据晶石名称找到对应的 aetheryte ID
+                    var aetheryteId = MapLocationDatabase.ResolveAetheryteId(matchedLoc);
+                    if (aetheryteId != 0)
+                    {
+                        OnLog?.Invoke($"传送到晶石: {matchedLoc.NearestAetheryteNameCN} (ID={aetheryteId})");
+                        var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                        if (!teleResult.Success)
+                        {
+                            OnLog?.Invoke($"传送失败: {teleResult.ErrorMessage}");
+                        }
+                    }
+                    else
+                    {
+                        OnLog?.Invoke($"无法解析晶石 ID: {matchedLoc.NearestAetheryteNameCN}");
+                    }
                 }
-
-                await Task.Delay(2000, token); // 等待传送完成
+                else
+                {
+                    OnLog?.Invoke("未匹配到已知点位，跳过传送");
+                }
             }
 
             // === 步骤4: 导航到挖宝点 ===
             _state.SetPhase(TreasureHuntPhase.NavigatingToSpot, "正在导航到挖宝点...");
             PhaseChanged?.Invoke(_state.Phase);
 
-            // 使用 vnavmesh 导航到目标位置
-            // 需要将地图坐标转换为世界坐标
-            // 这需要通过 MapLinkData 转换
             if (mapData?.Location != null)
             {
-                var worldPos = MapToWorldPosition(mapData.Location.MapX, mapData.Location.MapY);
+                // 使用解读地图时从 AgentMap.FlagMapMarkers 读取的世界坐标
+                var worldPos = mapData.Location.WorldPosition;
+                if (worldPos == Vector3.Zero)
+                {
+                    // 回退：通过 Map Excel 表转换地图坐标到世界坐标
+                    worldPos = MapToWorldPosition(mapData.Location.MapX, mapData.Location.MapY, mapData.Location.TerritoryId);
+                }
+
                 OnLog?.Invoke($"导航到世界坐标: ({worldPos.X:F1}, {worldPos.Y:F1}, {worldPos.Z:F1})");
 
                 var navResult = await _plugin.NavigationService.NavigateToAsync(worldPos, "藏宝图点位");
@@ -248,8 +265,17 @@ public class TreasureHuntOrchestrator : IDisposable
             {
                 _state.SetPhase(TreasureHuntPhase.Teleporting, "一键买图: 传送中...");
                 PhaseChanged?.Invoke(_state.Phase);
-                // 执行传送逻辑
-                await Task.Delay(2000, token);
+
+                var aetheryteId = MapLocationDatabase.ResolveAetheryteId(decipherResult.MatchedLocation);
+                if (aetheryteId != 0)
+                {
+                    OnLog?.Invoke($"传送到晶石: {decipherResult.MatchedLocation.NearestAetheryteNameCN} (ID={aetheryteId})");
+                    await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                }
+                else
+                {
+                    OnLog?.Invoke($"无法解析晶石 ID: {decipherResult.MatchedLocation.NearestAetheryteNameCN}");
+                }
             }
 
             return new OrchestratorResult
@@ -280,20 +306,52 @@ public class TreasureHuntOrchestrator : IDisposable
         return _plugin.MapDecipherService.FindMapInInventory(out _, out _);
     }
 
-    private Vector3 MapToWorldPosition(float mapX, float mapY)
+    /// <summary>
+    /// 通过 Map Excel 表将地图显示坐标 (如 9.3, 10.5) 转换为世界坐标。
+    /// 公式: worldX = ((mapX - 1) / 0.02 - offsetX) * 100 / sizeFactor
+    /// </summary>
+    private Vector3 MapToWorldPosition(float mapX, float mapY, uint territoryId = 0)
     {
-        // 将地图坐标 (X, Y) 转换为世界坐标 (X, Y, Z)
-        // 在 FF14 中，地图坐标与世界坐标的转换需要通过 MapToWorldMap8 实例
-        // 这需要使用 Dalamud 的 IDataManager 获取地图数据
-        // 简化实现 - 实际使用时需要通过 TerritoryMap 数据转换
+        try
+        {
+            // 获取当前领土的 Map 行
+            uint mapId = 0;
+            if (territoryId == 0)
+                territoryId = Plugin.ClientState.TerritoryType;
 
-        // 临时实现：返回近似坐标
-        // 实际应通过以下方式转换：
-        // 1. 获取当前 Territory 的 MapData
-        // 2. 使用 MapData 的 OffsetX, OffsetY, ScaleFactor 等参数
-        // 3. worldX = (mapX - offset) * scale + center
+            var ttSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.TerritoryType>();
+            if (ttSheet != null)
+            {
+                var ttRow = ttSheet.GetRow(territoryId);
+                mapId = ttRow.Map.RowId;
+            }
 
-        return new Vector3(mapX * 10.0f, 0, mapY * 10.0f);
+            if (mapId == 0) return Vector3.Zero;
+
+            var mapSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Map>();
+            if (mapSheet == null) return Vector3.Zero;
+
+            var mapRow = mapSheet.GetRow(mapId);
+
+            var offsetX = mapRow.OffsetX;
+            var offsetY = mapRow.OffsetY;
+            var sizeFactor = mapRow.SizeFactor;
+
+            if (sizeFactor == 0) return Vector3.Zero;
+
+            // 逆公式: MapUtil.WorldToMap 的逆运算
+            // WorldToMap: mapCoord = (worldCoord * sizeFactor / 100 + offset) * 0.02 + 1
+            // 逆: worldCoord = ((mapCoord - 1) / 0.02 - offset) * 100 / sizeFactor
+            var worldX = ((mapX - 1.0f) / 0.02f - offsetX) * 100.0f / sizeFactor;
+            var worldZ = ((mapY - 1.0f) / 0.02f - offsetY) * 100.0f / sizeFactor;
+
+            return new Vector3(worldX, 0, worldZ);
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"坐标转换失败: {ex.Message}");
+            return new Vector3(mapX * 10.0f, 0, mapY * 10.0f);
+        }
     }
 
     public void Cancel()

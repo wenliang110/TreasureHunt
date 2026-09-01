@@ -40,8 +40,8 @@ public class MapPurchaseService : IDisposable
 
     private const int ActionCooldownMs = 500;
 
-    // 交易板搜索关键字
-    private const string SearchKeywordCN = "古旧的巨兽皮地图";
+    // 交易板搜索关键字 (国服陈旧的卡冈图亚革地图)
+    private const string SearchKeywordCN = "陈旧的卡冈图亚革地图";
     private const string SearchKeywordEN = "Timeworn Gargantuaskin Map";
 
     public event Action<PurchaseState>? StateChanged;
@@ -300,45 +300,98 @@ public class MapPurchaseService : IDisposable
 
     private unsafe void SetMarketBoardSearchText(AtkUnitBase* atkUnitBase, string text)
     {
-        // 通过 AtkValue 设置搜索框文本
-        // 具体组件 ID 需要根据游戏版本调试
-        var inputNode = atkUnitBase->GetNodeById(11);
-        if (inputNode == null) return;
+        var uldManager = &atkUnitBase->UldManager;
+        for (var i = 0; i < uldManager->NodeListCount; i++)
+        {
+            var node = uldManager->NodeList[i];
+            if (node == null) continue;
 
-        // 使用 AtkStage 系统设置文本
-        // 这是一个简化实现，实际需要调试确认组件ID和交互方式
+            // 使用 GetAsAtkComponentTextInput 安全转换
+            var textInput = node->GetAsAtkComponentTextInput();
+            if (textInput == null) continue;
+
+            // SetText 接受 CStringPointer
+            var bytes = System.Text.Encoding.UTF8.GetBytes(text + "\0");
+            fixed (byte* pText = bytes)
+            {
+                textInput->SetText((InteropGenerator.Runtime.CStringPointer)pText);
+            }
+            OnLog?.Invoke($"设置搜索文本: {text}");
+            return;
+        }
+        OnLog?.Invoke("未找到搜索输入框组件");
     }
 
     private unsafe void TriggerMarketBoardSearch(AtkUnitBase* atkUnitBase)
     {
-        // 触发搜索按钮的回调
-        // 需要 fire 回调函数
+        // 通过 FireCallback 触发搜索
+        atkUnitBase->FireCallback(0, null, false);
+        OnLog?.Invoke("触发搜索");
     }
 
     private unsafe void SelectFirstSearchResult(AtkUnitBase* atkUnitBase)
     {
-        // 选择列表中的第一个结果项
+        // 通过 AtkUnitBase FireCallback 选择第一个搜索结果
+        var atkValues = stackalloc AtkValue[1];
+        atkValues[0].Type = AtkValueType.Int;
+        atkValues[0].Int = 0;
+        atkUnitBase->FireCallback(1, atkValues, false);
+        OnLog?.Invoke("选择第一个搜索结果");
     }
 
     private unsafe int ReadLowestPrice()
     {
         // 从交易板 UI 读取价格信息
-        // 需要解析 AtkTextNode 获取价格数值
+        var atkUnitBase = GetMarketBoardAddon();
+        if (atkUnitBase == null) return 0;
+
+        var uldManager = &atkUnitBase->UldManager;
+        for (var i = 0; i < uldManager->NodeListCount; i++)
+        {
+            var node = uldManager->NodeList[i];
+            if (node == null) continue;
+            if ((uint)node->Type != (uint)NodeType.Text) continue;
+
+            var textNode = (AtkTextNode*)node;
+            var text = textNode->NodeText.ToString();
+            // 价格通常为纯数字或包含逗号
+            if (text.Length > 0 && char.IsDigit(text[0]))
+            {
+                var clean = text.Replace(",", "").Replace(".", "").Replace(" ", "");
+                if (int.TryParse(clean, out var price))
+                    return price;
+            }
+        }
         return 0;
     }
 
     private unsafe void ClickPurchaseButton(AtkUnitBase* atkUnitBase)
     {
-        // 触发购买按钮的回调
+        // 通过 AtkUnitBase FireCallback 点击购买按钮
+        var atkValues = stackalloc AtkValue[1];
+        atkValues[0].Type = AtkValueType.Int;
+        atkValues[0].Int = 0;
+        atkUnitBase->FireCallback(1, atkValues, false);
+        OnLog?.Invoke("点击购买按钮");
     }
 
     private unsafe void ConfirmPurchaseDialog()
     {
-        // 确认购买弹窗
-        var confirmAddon = Plugin.GameGui.GetAddonByName("SelectYesno");
-        if (confirmAddon.Address == IntPtr.Zero) return;
+        // 确认 SelectYesno 弹窗 (点击"是")
+        var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
+        if (addon.Address == IntPtr.Zero)
+        {
+            OnLog?.Invoke("未找到确认弹窗");
+            return;
+        }
 
-        // 触发"是"按钮
+        var selectYesno = (AtkUnitBase*)addon.Address;
+        // SelectYesno 的 FireCallback 接受一个 bool: true=Yes, false=No
+        var atkValues = stackalloc AtkValue[1];
+        atkValues[0].Type = AtkValueType.Bool;
+        atkValues[0].Byte = 1; // true = Yes
+        selectYesno->FireCallback(1, atkValues, false);
+        OnLog?.Invoke("确认购买");
     }
 
     private async Task WaitAndSetState(PurchaseState state, CancellationToken token)

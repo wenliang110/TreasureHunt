@@ -22,7 +22,7 @@ public class Configuration : IPluginConfiguration
 
     // 交易板购买设置
     public int MaxPurchasePrice { get; set; } = 50000;   // 价格限制
-    public uint TreasureMapItemId { get; set; } = 43885; // 藏宝图ID (0=自动检测G18, 默认43885=Gargantuaskin)
+    public uint TreasureMapItemId { get; set; } = 46185; // 藏宝图ID (国服陈旧的卡冈图亚革地图)
     public int MaxPurchaseQuantity { get; set; } = 1;
 
     // 传送设置

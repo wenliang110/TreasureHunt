@@ -1,8 +1,11 @@
 using System;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Numerics;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
+using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using TreasureHunt.Helpers;
 using TreasureHunt.Models;
@@ -29,6 +32,9 @@ public class MapDecipherService : IDisposable
 
     // 挖掘动作 ID (Dig)
     private const uint DigActionId = 12898;
+
+    // 藏宝图旗帜标记默认图标 ID
+    private const uint TreasureFlagIconId = 0xEC91;
 
     public MapDecipherService(Plugin plugin)
     {
@@ -109,7 +115,7 @@ public class MapDecipherService : IDisposable
             }
 
             // 查找未解读的藏宝图
-            if (!FindMapInInventory(out var item, out _))
+            if (!FindMapInInventory(out _, out _))
             {
                 return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
             }
@@ -120,10 +126,14 @@ public class MapDecipherService : IDisposable
                 return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
             }
 
-            await Task.Delay(1000, token);
+            // 等待旗帜标记出现（解读后游戏会在 AgentMap 上放置一个 flag marker）
+            if (!await WaitForFlagMarker(token))
+            {
+                return new DecipherResult { Success = false, ErrorMessage = "解读后未检测到地图标记" };
+            }
 
             // 读取解读后的地图信息
-            var mapData = await ReadDecipheredMap(token);
+            var mapData = ReadDecipheredMap(token);
             if (mapData == null)
             {
                 return new DecipherResult { Success = false, ErrorMessage = "读取地图信息失败" };
@@ -166,25 +176,68 @@ public class MapDecipherService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 等待藏宝图旗帜标记出现在 AgentMap 上。
+    /// 解读后游戏会通过 SetFlagMapMarker 在 AgentMap 上放置一个标记。
+    /// </summary>
+    private async Task<bool> WaitForFlagMarker(CancellationToken token)
+    {
+        OnLog?.Invoke("等待地图标记出现...");
+        var timeout = TimeSpan.FromSeconds(8);
+        var startTime = DateTime.Now;
+
+        while ((DateTime.Now - startTime) < timeout)
+        {
+            token.ThrowIfCancellationRequested();
+
+            bool found;
+            unsafe { found = TryGetFlagMarker(out _, out _); }
+            if (found)
+            {
+                OnLog?.Invoke("检测到地图标记");
+                return true;
+            }
+
+            await Task.Delay(200, token);
+        }
+
+        OnLog?.Invoke("等待地图标记超时");
+        return false;
+    }
+
+    /// <summary>
+    /// 检查玩家是否有一张已解读的地图。
+    /// 解读后的藏宝图会在 AgentMap 上设置一个 flag marker（FlagMarkerCount > 0），
+    /// 同时 UIState 会记录下一次可解读的时间戳 (NextMapAllowanceTimestamp)。
+    /// </summary>
     public unsafe bool HasDecipheredMap()
     {
-        // 检查 event item 中是否已有解读的地图
-        var invManager = InventoryManager.Instance();
-        if (invManager == null) return false;
+        // 优先检查 AgentMap 上的 flag marker —— 解读后游戏会放置一个旗帜标记
+        if (TryGetFlagMarker(out _, out _))
+            return true;
 
-        var eventItems = invManager->GetInventoryContainer(InventoryType.KeyItems);
-        for (var i = 0; i < eventItems->Size; i++)
+        // 回退：检查 UIState 的下一次藏宝图解读时间戳。
+        // 当玩家解读了一张图，NextMapAllowanceTimestamp 会被设置为 18 小时后的时间；
+        // 若时间戳大于当前 Unix 时间，说明玩家有一张正在冷却中的藏宝图。
+        try
         {
-            var item = eventItems->GetInventorySlot(i);
-            // 解读后的地图会变成 event item
-            // 需要检查是否是 Gargantuaskin 解读后的 item
-            if (item->ItemId != 0 && item->ItemId != TreasureMapConstants.GargantuaskinItemId)
+            var uiState = UIState.Instance();
+            if (uiState != null)
             {
-                // 检查是否是解读过的 G18 地图
-                // 解读后的地图 itemId 会变化
-                // 这个需要根据实际游戏数据确认
+                var nextAllowance = uiState->NextMapAllowanceTimestamp;
+                if (nextAllowance > 0)
+                {
+                    var now = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    if (nextAllowance > now)
+                        return true;
+                }
             }
         }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"检查解读状态失败: {ex.Message}");
+        }
+
         return false;
     }
 
@@ -229,12 +282,11 @@ public class MapDecipherService : IDisposable
         }
     }
 
-    private async Task<TreasureMapData?> ReadDecipheredMap(CancellationToken token)
+    /// <summary>
+    /// 读取解读后的地图信息，包括领土 ID、地图 ID、世界坐标与显示坐标。
+    /// </summary>
+    private unsafe TreasureMapData? ReadDecipheredMap(CancellationToken token)
     {
-        await Task.Delay(500, token);
-
-        // 读取解读后地图的位置信息
-        // 地图数据存储在游戏内存中，需要通过 FFXIVClientStructs 读取
         try
         {
             var mapData = new TreasureMapData
@@ -246,21 +298,51 @@ public class MapDecipherService : IDisposable
                 IsDeciphered = true,
                 Location = new TreasureMapLocation
                 {
-                    TerritoryId = 0, // 需要从游戏数据读取
                     TerritoryName = "Living Memory",
                 }
             };
 
             // 读取地图坐标
-            // 通过 AgentMap 或直接读取游戏内存获取藏宝图标记位置
-            var (mapX, mapY) = ReadTreasureMapCoordinates();
-            if (mapData.Location != null)
+            if (TryGetFlagMarker(out var flag, out var agentMap))
             {
-                mapData.Location.MapX = mapX;
-                mapData.Location.MapY = mapY;
+                var territoryId = flag.TerritoryId;
+                var mapId = flag.MapId;
+                // FlagMapMarker 的 XFloat/YFloat 存储的是世界坐标
+                // (XFloat = world X, YFloat = world Z，由 SetFlagMapMarker 写入)
+                var worldX = flag.XFloat;
+                var worldZ = flag.YFloat;
+
+                if (mapData.Location != null)
+                {
+                    mapData.Location.TerritoryId = territoryId;
+                    mapData.Location.MapX = 0;
+                    mapData.Location.MapY = 0;
+                    mapData.Location.WorldPosition = new Vector3(worldX, 0, worldZ);
+                    mapData.Location.NearestAetheryteName = ResolveTerritoryName(agentMap, territoryId, mapId);
+                }
+
+                // 将世界坐标转换为地图显示坐标 (如 9.3, 10.5)
+                var (mapX, mapY) = ReadTreasureMapCoordinates();
+                if (mapData.Location != null)
+                {
+                    mapData.Location.MapX = mapX;
+                    mapData.Location.MapY = mapY;
+                }
+
+                OnLog?.Invoke($"读取地图坐标: ({mapX}, {mapY}) 领土: {territoryId} 世界: ({worldX:F1}, {worldZ:F1})");
+            }
+            else
+            {
+                // 回退：直接尝试读取坐标
+                var (mapX, mapY) = ReadTreasureMapCoordinates();
+                if (mapData.Location != null)
+                {
+                    mapData.Location.MapX = mapX;
+                    mapData.Location.MapY = mapY;
+                }
+                OnLog?.Invoke($"读取地图坐标: ({mapX}, {mapY})");
             }
 
-            OnLog?.Invoke($"读取地图坐标: ({mapX}, {mapY})");
             return mapData;
         }
         catch (Exception ex)
@@ -270,29 +352,131 @@ public class MapDecipherService : IDisposable
         }
     }
 
-    private unsafe (float mapX, float mapY) ReadTreasureMapCoordinates()
+    /// <summary>
+    /// 读取藏宝图标记的地图显示坐标 (X, Y)。
+    /// 藏宝图解读后，游戏会在 AgentMap 的 FlagMapMarkers 中放置一个标记，
+    /// 其 XFloat/YFloat 字段存储世界坐标 (worldX, worldZ)，
+    /// 需通过 Map Excel 表的 OffsetX/OffsetY/SizeFactor 转换为显示坐标。
+    /// </summary>
+    public unsafe (float mapX, float mapY) ReadTreasureMapCoordinates()
     {
-        // 通过 AgentMap 读取藏宝图标记位置
-        // 这需要逆向工程确认具体的内存偏移量
-        // 目前返回 0,0 作为占位，实际使用时需要调试确认
-        var agentMap = AgentMap.Instance();
-        if (agentMap == null) return (0, 0);
+        if (!TryGetFlagMarker(out var flag, out _))
+            return (0, 0);
 
-        // 读取地图标记信息
-        // AgentMap 中有当前地图的标记数据
-        // 需要遍历 map markers 查找 treasure marker
-        return (0, 0);
+        var worldX = flag.XFloat;
+        var worldZ = flag.YFloat;
+        var mapId = flag.MapId;
+
+        // 通过 Map Excel 表获取 OffsetX/OffsetY/SizeFactor，将世界坐标转换为显示坐标
+        var mapSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Map>();
+        if (mapSheet != null)
+        {
+            var mapRow = mapSheet.GetRow(mapId);
+            // Dalamud 的 MapUtil.WorldToMap 接受 (worldX, worldZ) 并返回显示坐标 (X, Y)
+            var mapCoords = MapUtil.WorldToMap(new Vector2(worldX, worldZ), mapRow);
+            return (mapCoords.X, mapCoords.Y);
+        }
+
+        // 回退公式：mapX = (worldX * sizeFactor / 100 + offsetX) * 0.02 + 1
+        // 无法获取 Map 表时，使用 flag marker 中 MapMarkerBase 的短整型坐标 (position * 16)
+        return (flag.MapMarker.X / 16.0f, flag.MapMarker.Y / 16.0f);
     }
 
-    private unsafe void MarkMapLocation()
+    /// <summary>
+    /// 在大地图上放置旗帜标记并打开地图窗口。
+    /// 通过 MapLinkPayload 创建一个可交互的地图链接，调用 GameGui.OpenMapWithMapLink 打开。
+    /// </summary>
+    public unsafe void MarkMapLocation()
     {
-        // 在大地图上放置旗帜标记
-        // 通过 AgentMap 或直接修改地图标记数据
-        var agentMap = AgentMap.Instance();
-        if (agentMap == null) return;
+        if (!TryGetFlagMarker(out var flag, out _))
+        {
+            OnLog?.Invoke("无可标记的藏宝图位置");
+            return;
+        }
 
-        // 设置旗帜标记到藏宝图位置
-        // 使用 /flag 命令或直接调用 AgentMap 方法
+        try
+        {
+            var (mapX, mapY) = ReadTreasureMapCoordinates();
+            // 使用人类可读的显示坐标创建 MapLinkPayload
+            var payload = new MapLinkPayload(
+                flag.TerritoryId,
+                flag.MapId,
+                mapX,
+                mapY);
+
+            Plugin.GameGui.OpenMapWithMapLink(payload);
+            OnLog?.Invoke($"已标记地图位置: ({mapX}, {mapY}) 领土 {flag.TerritoryId}");
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"标记地图失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 从 AgentMap 读取藏宝图旗帜标记。
+    /// 返回 false 表示当前没有旗帜标记（FlagMarkerCount == 0）。
+    /// </summary>
+    internal unsafe bool TryGetFlagMarker(out FlagMapMarker flag, out AgentMap* agentMap)
+    {
+        flag = default;
+        agentMap = GetAgentMap();
+        if (agentMap == null) return false;
+
+        // FlagMarkerCount 为 0 表示没有旗帜标记
+        if (agentMap->FlagMarkerCount == 0) return false;
+
+        var markers = agentMap->FlagMapMarkers;
+        if (markers.Length == 0) return false;
+
+        flag = markers[0];
+        return true;
+    }
+
+    /// <summary>
+    /// 获取 AgentMap 单例指针。AgentMap 通过 AgentModule 按 AgentId.Map 获取。
+    /// </summary>
+    internal static unsafe AgentMap* GetAgentMap()
+    {
+        try
+        {
+            var agentModule = AgentModule.Instance();
+            if (agentModule == null) return null;
+
+            var agent = agentModule->GetAgentByInternalId(AgentId.Map);
+            if (agent == null) return null;
+
+            return (AgentMap*)agent;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 根据领土 ID 查询领土名称。
+    /// </summary>
+    private static unsafe string ResolveTerritoryName(AgentMap* agentMap, uint territoryId, uint mapId)
+    {
+        // 优先从 TerritoryType Excel 表读取名称
+        try
+        {
+            var ttSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.TerritoryType>();
+            if (ttSheet != null)
+            {
+                var row = ttSheet.GetRow(territoryId);
+                var name = row.Name.ToString();
+                if (!string.IsNullOrEmpty(name)) return name;
+            }
+        }
+        catch { }
+
+        // 回退到 AgentMap 当前选中的领土
+        if (agentMap != null && agentMap->SelectedTerritoryId == territoryId)
+            return "Living Memory";
+
+        return "Living Memory";
     }
 
     public void Cancel()
