@@ -117,29 +117,28 @@ public class MainWindow : Window, IDisposable
 
         ImGui.Spacing();
 
-        // 输入框: 价格限制 + 藏宝图ID (匹配参考图)
-        ImGui.Columns(2, string.Empty, false);
+        // 输入框: 价格限制 + 藏宝图ID
         var priceVal = (int)config.MaxPurchasePrice;
         ImGui.Text("价格限制:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(80);
-        if (ImGui.InputInt("##price", ref priceVal, 1000, 10000))
+        ImGui.SetNextItemWidth(200);
+        if (ImGui.InputInt(" Gil##price", ref priceVal, 1000, 10000))
         {
             config.MaxPurchasePrice = priceVal;
             config.Save();
         }
 
-        ImGui.NextColumn();
+        ImGui.Spacing();
+
         var mapId = (int)config.TreasureMapItemId;
         ImGui.Text("藏宝图ID:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(80);
+        ImGui.SetNextItemWidth(200);
         if (ImGui.InputInt("##mapid", ref mapId, 0, 0))
         {
             config.TreasureMapItemId = (uint)mapId;
             config.Save();
         }
-        ImGui.Columns(1);
 
         ImGui.Spacing();
         var fullAutoMode = config.EnableFullAutoMode;
