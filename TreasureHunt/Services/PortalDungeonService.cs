@@ -244,29 +244,36 @@ public class PortalDungeonService : IDisposable
     private async Task WaitForRollComplete(CancellationToken token)
     {
         OnLog?.Invoke("等待 roll 点完成...");
-        var timeout = TimeSpan.FromSeconds(RollWaitTimeoutSec);
-        var startTime = DateTime.Now;
-        var lastRollCount = 0;
 
-        while ((DateTime.Now - startTime) < timeout)
+        // 检查 LazyLoot 是否可用，可用的话自动触发 Need Roll
+        if (LazyLootHelper.IsAvailable())
         {
-            token.ThrowIfCancellationRequested();
-
-            // 检查是否有 roll 点窗口
-            // 如果没有 roll 窗口，说明 roll 点已完成
-            var hasRollWindow = Plugin.GameGui.GetAddonByName("NeedGreed") != null ||
-                                Plugin.GameGui.GetAddonByName("Loot") != null;
-
-            if (!hasRollWindow && (DateTime.Now - startTime).TotalSeconds > 3)
+            OnLog?.Invoke("检测到 LazyLoot，自动执行 Need Roll");
+            var rolled = LazyLootHelper.RollNeed();
+            if (rolled)
             {
-                OnLog?.Invoke("roll 点完成");
-                return;
+                OnLog?.Invoke("已触发 LazyLoot Roll");
             }
-
-            await Task.Delay(1000, token);
+            else
+            {
+                OnLog?.Invoke("LazyLoot Roll 触发失败，等待手动 Roll");
+            }
+        }
+        else
+        {
+            OnLog?.Invoke("未检测到 LazyLoot，请手动 Roll 或安装 LazyLoot 插件");
         }
 
-        OnLog?.Invoke("等待 roll 点超时");
+        // 等待 Roll 完成
+        var completed = await LazyLootHelper.WaitForRollComplete(RollWaitTimeoutSec * 1000, token);
+        if (completed)
+        {
+            OnLog?.Invoke("roll 点完成");
+        }
+        else
+        {
+            OnLog?.Invoke("等待 roll 点超时");
+        }
     }
 
     private async Task<bool> IsBonusRoomTriggered(CancellationToken token)

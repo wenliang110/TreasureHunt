@@ -5,6 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.Utility;
 using TreasureHunt.Services;
+using TreasureHunt.Helpers;
 using TreasureHunt.Models;
 
 namespace TreasureHunt.Windows;
@@ -248,13 +249,29 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "依赖插件:");
         ImGui.SameLine();
-        var vnav = TreasureHunt.Helpers.VnavmeshHelper.IsAvailable();
-        ImGui.TextColored(vnav ? new Vector4(0.2f, 0.8f, 0.2f, 1.0f) : new Vector4(0.9f, 0.2f, 0.2f, 1.0f),
-            vnav ? "vnavmesh OK" : "vnavmesh 不可用");
+
+        // vnavmesh
+        var vnavStatus = DependencyManager.GetStatus(DependencyType.Vnavmesh);
+        ImGui.TextColored(vnavStatus.IsAvailable ? new Vector4(0.2f, 0.8f, 0.2f, 1.0f) : new Vector4(0.9f, 0.2f, 0.2f, 1.0f),
+            vnavStatus.IsAvailable ? "vnavmesh OK" : "vnavmesh 不可用");
         ImGui.SameLine();
-        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "| 战斗插件: RSR/BossMod (手动)");
+
+        // 战斗插件
+        var bossModStatus = DependencyManager.GetStatus(DependencyType.BossMod);
+        var rsrStatus = DependencyManager.GetStatus(DependencyType.RotationSolver);
+        var combatOk = bossModStatus.IsAvailable || rsrStatus.IsAvailable;
+        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "| 战斗: ");
         ImGui.SameLine();
-        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "| roll点: Kapture (手动)");
+        ImGui.TextColored(combatOk ? new Vector4(0.2f, 0.8f, 0.2f, 1.0f) : new Vector4(0.9f, 0.6f, 0.2f, 1.0f),
+            combatOk ? "OK" : "手动");
+        ImGui.SameLine();
+
+        // Roll 点插件
+        var lazyLootStatus = DependencyManager.GetStatus(DependencyType.LazyLoot);
+        ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "| Roll点: ");
+        ImGui.SameLine();
+        ImGui.TextColored(lazyLootStatus.IsAvailable ? new Vector4(0.2f, 0.8f, 0.2f, 1.0f) : new Vector4(0.9f, 0.6f, 0.2f, 1.0f),
+            lazyLootStatus.IsAvailable ? "LazyLoot OK" : "LazyLoot 未安装");
     }
 
     private void DrawLogPanel()
