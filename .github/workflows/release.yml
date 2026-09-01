@@ -59,6 +59,7 @@ jobs:
       with:
         tag_name: ${{ steps.version.outputs.TAG }}
         name: TreasureHunt ${{ steps.version.outputs.TAG }}
+        make_latest: latest
         body: |
           ## TreasureHunt ${{ steps.version.outputs.TAG }}
 

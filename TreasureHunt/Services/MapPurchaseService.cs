@@ -189,37 +189,87 @@ public class MapPurchaseService : IDisposable
                     return false;
                 }
 
-                // 等待传送完成
-                var waitStart = DateTime.Now;
-                while ((DateTime.Now - waitStart).TotalSeconds < 30)
+                // 等待传送完成（分阶段）
+                OnLog?.Invoke("等待区域加载...");
+
+                // 阶段1: 等待加载画面出现（传送后会有黑屏）
+                var phase1Start = DateTime.Now;
+                var loadingStarted = false;
+                while ((DateTime.Now - phase1Start).TotalSeconds < 15)
                 {
                     token.ThrowIfCancellationRequested();
-                    await Task.Delay(500, token);
-                    // 检查是否在加载中（传送后会出现加载画面）
+                    await Task.Delay(300, token);
                     if (Plugin.Condition[ConditionFlag.BetweenAreas] ||
                         Plugin.Condition[ConditionFlag.BetweenAreas51])
                     {
-                        continue;
+                        loadingStarted = true;
+                        break;
                     }
-                    // 检查是否传送完成（玩家重新出现）
-                    var player = Plugin.ObjectTable.LocalPlayer;
-                    if (player != null && !Plugin.Condition[ConditionFlag.BetweenAreas])
+                }
+
+                if (!loadingStarted)
+                {
+                    // 没检测到加载画面，可能已经在目标区域或传送失败
+                    OnLog?.Invoke("未检测到加载画面，继续等待...");
+                }
+
+                // 阶段2: 等待加载画面消失
+                var phase2Start = DateTime.Now;
+                while ((DateTime.Now - phase2Start).TotalSeconds < 30)
+                {
+                    token.ThrowIfCancellationRequested();
+                    await Task.Delay(500, token);
+                    if (!Plugin.Condition[ConditionFlag.BetweenAreas] &&
+                        !Plugin.Condition[ConditionFlag.BetweenAreas51])
                     {
                         break;
                     }
                 }
 
-                // 额外等待 2 秒让场景加载完毕
-                await Task.Delay(2000, token);
+                // 阶段3: 等待玩家对象加载
+                var phase3Start = DateTime.Now;
+                while ((DateTime.Now - phase3Start).TotalSeconds < 10)
+                {
+                    token.ThrowIfCancellationRequested();
+                    await Task.Delay(500, token);
+                    if (Plugin.ObjectTable.LocalPlayer != null)
+                        break;
+                }
 
-                // 重新查找交易板
-                mbObj = FindNearestMarketBoard();
+                // 阶段4: 额外等待 5 秒让场景对象完全加载
+                OnLog?.Invoke("场景加载中，等待对象刷新...");
+                await Task.Delay(5000, token);
+
+                // 阶段5: 等待 vnavmesh 网格就绪
+                var vnavWaitStart = DateTime.Now;
+                while ((DateTime.Now - vnavWaitStart).TotalSeconds < 15)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (VnavmeshHelper.IsAvailable())
+                        break;
+                    await Task.Delay(1000, token);
+                }
+
+                // 阶段6: 重试查找交易板（对象可能渐进加载）
+                IGameObject? board = null;
+                var retryStart = DateTime.Now;
+                while ((DateTime.Now - retryStart).TotalSeconds < 15)
+                {
+                    token.ThrowIfCancellationRequested();
+                    board = FindNearestMarketBoard();
+                    if (board != null) break;
+                    OnLog?.Invoke($"查找交易板中... ({(DateTime.Now - retryStart).TotalSeconds:F0}s)");
+                    await Task.Delay(2000, token);
+                }
+
+                mbObj = board;
                 if (mbObj == null)
                 {
-                    OnLog?.Invoke($"到达 {cityName} 后仍未找到交易板，请使用 /thunt debug 查看附近对象");
+                    OnLog?.Invoke($"到达 {cityName} 后仍未找到交易板");
+                    OnLog?.Invoke("请使用 /thunt debug 查看附近对象列表");
                     return false;
                 }
-                OnLog?.Invoke($"到达 {cityName}，已找到交易板");
+                OnLog?.Invoke($"到达 {cityName}，已找到交易板: {mbObj.Name}");
             }
 
             var player2 = Plugin.ObjectTable.LocalPlayer;
