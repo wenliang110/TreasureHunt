@@ -87,8 +87,23 @@ public class MapPurchaseService : IDisposable
         {
             State = PurchaseState.OpeningMarketBoard;
 
-            if (!await OpenMarketBoard(token))
-                return new PurchaseResult { Success = false, ErrorMessage = "无法打开交易板" };
+            // 优先使用 PDR 远程交易板（无需跑到主城）
+            var usePdr = PdrMarketHelper.IsAvailable() && _plugin.Configuration.UsePdrMarket;
+            if (usePdr)
+            {
+                OnLog?.Invoke("使用 PDR 远程交易板购买...");
+                if (!await OpenMarketBoardPdr(token))
+                {
+                    OnLog?.Invoke("PDR 打开失败，回退到传统方式...");
+                    usePdr = false;
+                }
+            }
+
+            if (!usePdr)
+            {
+                if (!await OpenMarketBoard(token))
+                    return new PurchaseResult { Success = false, ErrorMessage = "无法打开交易板" };
+            }
 
             await WaitAndSetState(PurchaseState.SearchingItem, token);
             if (!await SearchForMap(token))
@@ -136,6 +151,57 @@ public class MapPurchaseService : IDisposable
     {
         _cts?.Cancel();
         State = PurchaseState.Idle;
+    }
+
+    /// <summary>
+    /// 使用 PDR (更好的市场布告板) 打开远程交易板
+    /// 通过 /pdr market &lt;物品ID&gt; 直接打开，无需跑到主城
+    /// </summary>
+    private async Task<bool> OpenMarketBoardPdr(CancellationToken token)
+    {
+        try
+        {
+            if (IsMarketBoardOpen())
+            {
+                OnLog?.Invoke("交易板已打开");
+                return true;
+            }
+
+            var itemId = _plugin.Configuration.TreasureMapItemId;
+            OnLog?.Invoke($"执行 /pdr market {itemId} ...");
+
+            if (!PdrMarketHelper.OpenMarket(itemId))
+            {
+                OnLog?.Invoke("PDR 命令执行失败");
+                return false;
+            }
+
+            // 等待交易板窗口出现
+            var waitStart = DateTime.Now;
+            while ((DateTime.Now - waitStart).TotalSeconds < 8)
+            {
+                token.ThrowIfCancellationRequested();
+                if (IsMarketBoardOpen())
+                {
+                    OnLog?.Invoke("PDR 交易板已打开");
+                    return true;
+                }
+                await Task.Delay(300, token);
+            }
+
+            OnLog?.Invoke("等待 PDR 交易板打开超时");
+            return IsMarketBoardOpen();
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"PDR 打开交易板失败: {ex.Message}");
+            Plugin.Log.Error($"PDR 打开交易板异常: {ex}");
+            return false;
+        }
     }
 
     /// <summary>

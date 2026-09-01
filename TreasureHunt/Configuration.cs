@@ -21,7 +21,8 @@ public class Configuration : IPluginConfiguration
     public bool EnableAutoPurchase { get; set; } = false;
 
     // 交易板购买设置
-    public int MaxPurchasePrice { get; set; } = 50000;   // 价格限制
+    public bool UsePdrMarket { get; set; } = true;           // 使用 PDR 远程交易板 (无需跑主城)
+    public int MaxPurchasePrice { get; set; } = 50000;       // 价格限制
     public uint TreasureMapItemId { get; set; } = 46185; // 藏宝图ID (国服陈旧的卡冈图亚革地图)
     public int MaxPurchaseQuantity { get; set; } = 1;
 

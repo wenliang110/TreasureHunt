@@ -11,6 +11,7 @@ public enum DependencyType
     BossMod,
     RotationSolver,
     Kapture,
+    BetterMarketBoard,
 }
 
 public class DependencyStatus
@@ -70,6 +71,13 @@ public static class DependencyManager
             IsRequired = false,
             Note = "Roll点(备选)"
         };
+        _statuses[DependencyType.BetterMarketBoard] = new DependencyStatus
+        {
+            Type = DependencyType.BetterMarketBoard,
+            DisplayName = "更好的市场布告板",
+            IsRequired = false,
+            Note = "远程交易板买图 (/pdr market)"
+        };
     }
 
     public static IReadOnlyDictionary<DependencyType, DependencyStatus> GetAllStatuses()
@@ -101,6 +109,7 @@ public static class DependencyManager
         _statuses[DependencyType.BossMod].IsAvailable = CheckBossMod();
         _statuses[DependencyType.RotationSolver].IsAvailable = CheckRotationSolver();
         _statuses[DependencyType.Kapture].IsAvailable = CheckKapture();
+        _statuses[DependencyType.BetterMarketBoard].IsAvailable = CheckBetterMarketBoard();
     }
 
     /// <summary>
@@ -148,6 +157,15 @@ public static class DependencyManager
     private static bool CheckKapture()
     {
         return IsAssemblyLoaded("Kapture");
+    }
+
+    private static bool CheckBetterMarketBoard()
+    {
+        // 更好的市场布告板 (PandaDutyReborn / BetterMarketBoard)
+        // 插件名可能是 PandaDutyReborn 或 BetterMarketBoard
+        return IsAssemblyLoaded("PandaDutyReborn") ||
+               IsAssemblyLoaded("BetterMarketBoard") ||
+               IsAssemblyLoaded("PandaDuty");
     }
 
     public static void ForceRefresh()

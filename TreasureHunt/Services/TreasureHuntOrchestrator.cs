@@ -41,6 +41,7 @@ public class TreasureHuntOrchestrator : IDisposable
 
     /// <summary>
     /// 启动全自动挖宝流程
+    /// 新流程：先传送到挖宝地图 → PDR 远程买图 → 解读 → 导航 → 挖掘 → 进洞
     /// </summary>
     public async Task<OrchestratorResult> RunFullAutoAsync()
     {
@@ -57,7 +58,47 @@ public class TreasureHuntOrchestrator : IDisposable
 
         try
         {
-            // === 步骤1: 购买藏宝图（如果启用且背包无图） ===
+            // === 步骤1: 先传送到挖宝地图区域（记忆之野）===
+            // 如果不在目标地图且启用了自动传送，先传送过去
+            if (_plugin.Configuration.EnableAutoTeleport)
+            {
+                var currentTerritory = Plugin.ClientState.TerritoryType;
+                var targetTerritory = TreasureMapConstants.GargantuaskinTerritoryId;
+
+                if (currentTerritory != targetTerritory)
+                {
+                    _state.SetPhase(TreasureHuntPhase.Teleporting, "传送到挖宝地图...");
+                    PhaseChanged?.Invoke(_state.Phase);
+
+                    var aetheryteId = MapLocationDatabase.LookupAetheryteIdByName(
+                        TreasureMapConstants.DefaultAetheryteNameCN);
+                    if (aetheryteId == 0)
+                    {
+                        aetheryteId = MapLocationDatabase.LookupAetheryteIdByName(
+                            TreasureMapConstants.DefaultAetheryteNameEN);
+                    }
+
+                    if (aetheryteId != 0)
+                    {
+                        OnLog?.Invoke($"传送到挖宝地图: {TreasureMapConstants.DefaultAetheryteNameCN} (ID={aetheryteId})");
+                        var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                        if (!teleResult.Success)
+                        {
+                            OnLog?.Invoke($"传送失败: {teleResult.ErrorMessage}");
+                        }
+                    }
+                    else
+                    {
+                        OnLog?.Invoke($"找不到挖宝地图水晶: {TreasureMapConstants.DefaultAetheryteNameCN}");
+                    }
+                }
+                else
+                {
+                    OnLog?.Invoke("已在挖宝地图区域，跳过传送");
+                }
+            }
+
+            // === 步骤2: 购买藏宝图（如果启用且背包无图） ===
             if (_plugin.Configuration.EnableAutoPurchase || _plugin.Configuration.EnableOneClickBuyDecipher)
             {
                 _state.SetPhase(TreasureHuntPhase.PurchasingMap, "正在购买藏宝图...");
@@ -96,14 +137,15 @@ public class TreasureHuntOrchestrator : IDisposable
             var matchedLoc = decipherResult.MatchedLocation;
             OnLog?.Invoke($"解读成功，坐标: ({mapData?.Location?.MapX}, {mapData?.Location?.MapY})");
 
-            // === 步骤3: 传送到最近晶石 ===
-            if (_plugin.Configuration.EnableAutoTeleport)
+            // === 步骤3: 传送到最近晶石（仅当不在挖宝地图时）===
+            if (_plugin.Configuration.EnableAutoTeleport && matchedLoc != null)
             {
-                _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送...");
-                PhaseChanged?.Invoke(_state.Phase);
-
-                if (matchedLoc != null)
+                var currentTerritory = Plugin.ClientState.TerritoryType;
+                if (currentTerritory != TreasureMapConstants.GargantuaskinTerritoryId)
                 {
+                    _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送...");
+                    PhaseChanged?.Invoke(_state.Phase);
+
                     var aetheryteId = MapLocationDatabase.ResolveAetheryteId(matchedLoc);
                     if (aetheryteId != 0)
                     {
@@ -121,7 +163,7 @@ public class TreasureHuntOrchestrator : IDisposable
                 }
                 else
                 {
-                    OnLog?.Invoke("未匹配到已知点位，跳过传送");
+                    OnLog?.Invoke("已在挖宝地图，直接导航到点位");
                 }
             }
 
@@ -222,6 +264,7 @@ public class TreasureHuntOrchestrator : IDisposable
 
     /// <summary>
     /// 一键买图+解读
+    /// 新流程：先传送到挖宝地图 → PDR 远程买图 → 解读
     /// </summary>
     public async Task<OrchestratorResult> OneClickBuyAndDecipherAsync()
     {
@@ -231,6 +274,31 @@ public class TreasureHuntOrchestrator : IDisposable
 
         try
         {
+            // 先传送到挖宝地图
+            if (_plugin.Configuration.EnableAutoTeleport)
+            {
+                var currentTerritory = Plugin.ClientState.TerritoryType;
+                if (currentTerritory != TreasureMapConstants.GargantuaskinTerritoryId)
+                {
+                    _state.SetPhase(TreasureHuntPhase.Teleporting, "传送到挖宝地图...");
+                    PhaseChanged?.Invoke(_state.Phase);
+
+                    var aetheryteId = MapLocationDatabase.LookupAetheryteIdByName(
+                        TreasureMapConstants.DefaultAetheryteNameCN);
+                    if (aetheryteId == 0)
+                    {
+                        aetheryteId = MapLocationDatabase.LookupAetheryteIdByName(
+                            TreasureMapConstants.DefaultAetheryteNameEN);
+                    }
+
+                    if (aetheryteId != 0)
+                    {
+                        OnLog?.Invoke($"传送到挖宝地图: {TreasureMapConstants.DefaultAetheryteNameCN} (ID={aetheryteId})");
+                        await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                    }
+                }
+            }
+
             // 购买
             _state.SetPhase(TreasureHuntPhase.PurchasingMap, "一键买图: 购买中...");
             PhaseChanged?.Invoke(_state.Phase);
