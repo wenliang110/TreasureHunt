@@ -160,26 +160,27 @@ public class MapPurchaseService : IDisposable
             {
                 OnLog?.Invoke("当前区域无交易板，尝试传送到主城...");
 
-                // 已知主城水晶 ID（交易板就在附近）
-                // 利姆萨下层甲板=2, 格里达尼亚旧街=9, 乌尔达哈=1
-                // 利姆萨上层甲板=8, 新格里达尼亚=66, 乌尔达哈商业区=12
-                var cityAetherytes = new (uint id, string name)[]
+                // 动态获取所有已解锁水晶（含名称），单次刷新列表
+                var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
+                OnLog?.Invoke($"已解锁水晶数量: {unlocked.Count}");
+
+                // 调试：列出所有已解锁水晶
+                foreach (var (id, name, _) in unlocked)
                 {
-                    (2, "利姆萨·罗敏萨下层甲板"),
-                    (9, "格里达尼亚旧街"),
-                    (1, "乌尔达哈"),
-                    (8, "利姆萨·罗敏萨上层甲板"),
-                    (66, "新格里达尼亚"),
-                    (12, "乌尔达哈商业区"),
-                };
+                    Plugin.Log.Debug($"已解锁水晶: ID={id} Name={name}");
+                }
 
                 uint teleportTarget = 0;
                 string cityName = "";
+                // 第一优先：利姆萨·罗敏萨下层甲板（海都，交易板最近）
+                var limsaKeywords = new[] { "利姆萨", "Limsa" };
+                var gridaniaKeywords = new[] { "格里达尼亚", "Gridania" };
+                var uldahKeywords = new[] { "乌尔达哈", "Ul'dah", "Uldah" };
 
-                // 优先用已知 ID 检查是否已解锁
-                foreach (var (id, name) in cityAetherytes)
+                // 优先1：利姆萨下层甲板（精确匹配关键词组合）
+                foreach (var (id, name, _) in unlocked)
                 {
-                    if (AetheryteHelper.IsAetheryteUnlocked(id))
+                    if (ContainsAny(name, limsaKeywords) && name.Contains("下层", StringComparison.OrdinalIgnoreCase))
                     {
                         teleportTarget = id;
                         cityName = name;
@@ -187,17 +188,71 @@ public class MapPurchaseService : IDisposable
                     }
                 }
 
-                // 如果已知 ID 都没解锁，回退到名称搜索
+                // 优先2：利姆萨任意区域
                 if (teleportTarget == 0)
                 {
-                    var searchNames = new[] { "利姆萨", "格里达尼亚", "乌尔达哈" };
-                    foreach (var search in searchNames)
+                    foreach (var (id, name, _) in unlocked)
                     {
-                        var id = AetheryteHelper.FindAetheryteIdByName(search);
-                        if (id != 0)
+                        if (ContainsAny(name, limsaKeywords))
                         {
                             teleportTarget = id;
-                            cityName = search;
+                            cityName = name;
+                            break;
+                        }
+                    }
+                }
+
+                // 优先3：乌尔达哈现世回廊（交易板近）
+                if (teleportTarget == 0)
+                {
+                    foreach (var (id, name, _) in unlocked)
+                    {
+                        if (ContainsAny(name, uldahKeywords) && name.Contains("现世", StringComparison.OrdinalIgnoreCase))
+                        {
+                            teleportTarget = id;
+                            cityName = name;
+                            break;
+                        }
+                    }
+                }
+
+                // 优先4：乌尔达哈任意区域
+                if (teleportTarget == 0)
+                {
+                    foreach (var (id, name, _) in unlocked)
+                    {
+                        if (ContainsAny(name, uldahKeywords))
+                        {
+                            teleportTarget = id;
+                            cityName = name;
+                            break;
+                        }
+                    }
+                }
+
+                // 优先5：格里达尼亚旧街（交易板近）
+                if (teleportTarget == 0)
+                {
+                    foreach (var (id, name, _) in unlocked)
+                    {
+                        if (ContainsAny(name, gridaniaKeywords) && name.Contains("旧", StringComparison.OrdinalIgnoreCase))
+                        {
+                            teleportTarget = id;
+                            cityName = name;
+                            break;
+                        }
+                    }
+                }
+
+                // 优先6：格里达尼亚任意区域
+                if (teleportTarget == 0)
+                {
+                    foreach (var (id, name, _) in unlocked)
+                    {
+                        if (ContainsAny(name, gridaniaKeywords))
+                        {
+                            teleportTarget = id;
+                            cityName = name;
                             break;
                         }
                     }
@@ -206,10 +261,11 @@ public class MapPurchaseService : IDisposable
                 if (teleportTarget == 0)
                 {
                     OnLog?.Invoke("未找到已解锁的主城水晶，请手动前往主城");
+                    OnLog?.Invoke("调试: 请使用 /thunt debug 查看附近对象，或检查 Dalamud 日志中的水晶列表");
                     return false;
                 }
 
-                OnLog?.Invoke($"传送至 {cityName} (水晶ID={teleportTarget})...");
+                OnLog?.Invoke($"选定传送目标: {cityName} (水晶ID={teleportTarget})");
                 if (!AetheryteHelper.TeleportToAetheryte(teleportTarget))
                 {
                     OnLog?.Invoke("传送失败，可能正在冷却中");
@@ -756,6 +812,16 @@ public class MapPurchaseService : IDisposable
 
         _lastActionTime = DateTime.Now;
         State = state;
+    }
+
+    private static bool ContainsAny(string text, string[] keywords)
+    {
+        foreach (var kw in keywords)
+        {
+            if (text.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     public void Dispose()

@@ -199,6 +199,39 @@ public static unsafe class AetheryteHelper
     }
 
     /// <summary>
+    /// 获取所有已解锁的水晶及其名称（单次刷新列表，避免重复调用）
+    /// </summary>
+    public static List<(uint aetheryteId, string name, uint territoryId)> GetUnlockedAetherytesWithNames()
+    {
+        var result = new List<(uint, string, uint)>();
+        try
+        {
+            if (!RefreshAetheryteList()) return result;
+
+            var telepo = Telepo.Instance();
+            if (telepo == null) return result;
+
+            var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
+            if (aetheryteSheet == null) return result;
+
+            for (var i = 0; i < telepo->TeleportList.Count; i++)
+            {
+                ref readonly var tp = ref telepo->TeleportList[i];
+                var row = aetheryteSheet.GetRow(tp.AetheryteId);
+                var placeName = row.PlaceName.IsValid ? row.PlaceName.Value.Name.ToString() : "";
+                var aethernetName = row.AethernetName.IsValid ? row.AethernetName.Value.Name.ToString() : "";
+                var displayName = !string.IsNullOrEmpty(aethernetName) ? aethernetName : placeName;
+                result.Add((tp.AetheryteId, displayName, (uint)tp.TerritoryId));
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"获取已解锁水晶(含名称)失败: {ex.Message}");
+        }
+        return result;
+    }
+
+    /// <summary>
     /// 通过名称查找已解锁的水晶 ID（支持中英文）
     /// </summary>
     public static uint FindAetheryteIdByName(string name)
