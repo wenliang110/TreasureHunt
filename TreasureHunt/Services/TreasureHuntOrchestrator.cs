@@ -58,105 +58,8 @@ public class TreasureHuntOrchestrator : IDisposable
 
         try
         {
-            // === 步骤1: 先传送到挖宝地图区域（记忆之野）===
-            // 如果不在目标地图且启用了自动传送，先传送过去
-            if (_plugin.Configuration.EnableAutoTeleport)
-            {
-                var currentTerritory = Plugin.ClientState.TerritoryType;
-                var targetTerritory = TreasureMapConstants.GargantuaskinTerritoryId;
-
-                if (currentTerritory != targetTerritory)
-                {
-                    _state.SetPhase(TreasureHuntPhase.Teleporting, "传送到挖宝地图...");
-                    PhaseChanged?.Invoke(_state.Phase);
-
-                    // 从已解锁水晶列表中找目标地图的水晶
-                    // 优先顺序：记忆(忆) > 火 > 风
-                    var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
-                    var g18Aetherytes = unlocked.FindAll(a => a.territoryId == targetTerritory);
-                    OnLog?.Invoke($"目标地图已解锁水晶数: {g18Aetherytes.Count}");
-                    foreach (var a in g18Aetherytes)
-                    {
-                        Plugin.Log.Debug($"G18水晶: ID={a.aetheryteId} Name={a.name} Terr={a.territoryId}");
-                    }
-
-                    uint aetheryteId = 0;
-                    string aetheryteName = "";
-
-                    // 优先找"记忆/忆/Memoris"
-                    var memKeywords = new[] { "记忆", "忆", "Memoris", "Memory" };
-                    foreach (var a in g18Aetherytes)
-                    {
-                        foreach (var kw in memKeywords)
-                        {
-                            if (a.name.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                            {
-                                aetheryteId = a.aetheryteId;
-                                aetheryteName = a.name;
-                                goto foundAetheryte;
-                            }
-                        }
-                    }
-
-                    // 其次找"火/Fire"
-                    var fireKeywords = new[] { "火", "Fire" };
-                    foreach (var a in g18Aetherytes)
-                    {
-                        foreach (var kw in fireKeywords)
-                        {
-                            if (a.name.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                            {
-                                aetheryteId = a.aetheryteId;
-                                aetheryteName = a.name;
-                                goto foundAetheryte;
-                            }
-                        }
-                    }
-
-                    // 再找"风/Wind"
-                    var windKeywords = new[] { "风", "Wind" };
-                    foreach (var a in g18Aetherytes)
-                    {
-                        foreach (var kw in windKeywords)
-                        {
-                            if (a.name.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                            {
-                                aetheryteId = a.aetheryteId;
-                                aetheryteName = a.name;
-                                goto foundAetheryte;
-                            }
-                        }
-                    }
-
-                    // 最后用第一个
-                    if (g18Aetherytes.Count > 0)
-                    {
-                        aetheryteId = g18Aetherytes[0].aetheryteId;
-                        aetheryteName = g18Aetherytes[0].name;
-                    }
-
-                foundAetheryte:
-                    if (aetheryteId != 0)
-                    {
-                        OnLog?.Invoke($"传送到挖宝地图: {aetheryteName} (ID={aetheryteId})");
-                        var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
-                        if (!teleResult.Success)
-                        {
-                            OnLog?.Invoke($"传送失败: {teleResult.ErrorMessage}");
-                        }
-                    }
-                    else
-                    {
-                        OnLog?.Invoke($"找不到挖宝地图水晶: {TreasureMapConstants.DefaultAetheryteNameCN}");
-                    }
-                }
-                else
-                {
-                    OnLog?.Invoke("已在挖宝地图区域，跳过传送");
-                }
-            }
-
-            // === 步骤2: 购买藏宝图（如果启用且背包无图） ===
+            // === 步骤1: 购买藏宝图（如果启用且背包无图）===
+            // 优先 PDR 远程购买，失败则自动传送到主城购买
             if (_plugin.Configuration.EnableAutoPurchase || _plugin.Configuration.EnableOneClickBuyDecipher)
             {
                 _state.SetPhase(TreasureHuntPhase.PurchasingMap, "正在购买藏宝图...");
@@ -199,12 +102,27 @@ public class TreasureHuntOrchestrator : IDisposable
             if (_plugin.Configuration.EnableAutoTeleport && matchedLoc != null)
             {
                 var currentTerritory = Plugin.ClientState.TerritoryType;
-                if (currentTerritory != TreasureMapConstants.GargantuaskinTerritoryId)
+                // 用名称判断是否在G18地图：查找附近是否有地场节点水晶
+                // （领土ID可能不准确，用名称匹配更可靠）
+                bool isInG18 = false;
+                var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
+                foreach (var a in unlocked)
+                {
+                    if (a.name.Contains("地场节点", StringComparison.OrdinalIgnoreCase) && 
+                        a.territoryId == currentTerritory)
+                    {
+                        isInG18 = true;
+                        break;
+                    }
+                }
+
+                if (!isInG18)
                 {
                     _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送...");
                     PhaseChanged?.Invoke(_state.Phase);
 
-                    var aetheryteId = MapLocationDatabase.ResolveAetheryteId(matchedLoc);
+                    // 通过名称匹配找水晶ID（不依赖领土ID）
+                    var aetheryteId = FindG18AetheryteByName(matchedLoc.NearestAetheryteNameCN);
                     if (aetheryteId != 0)
                     {
                         OnLog?.Invoke($"传送到晶石: {matchedLoc.NearestAetheryteNameCN} (ID={aetheryteId})");
@@ -216,7 +134,14 @@ public class TreasureHuntOrchestrator : IDisposable
                     }
                     else
                     {
-                        OnLog?.Invoke($"无法解析晶石 ID: {matchedLoc.NearestAetheryteNameCN}");
+                        OnLog?.Invoke($"无法找到晶石: {matchedLoc.NearestAetheryteNameCN}");
+                        // 回退：找任意一个地场节点水晶传送
+                        var fallbackId = FindAnyG18Aetheryte();
+                        if (fallbackId != 0)
+                        {
+                            OnLog?.Invoke($"回退传送到任意地场节点 (ID={fallbackId})");
+                            await _plugin.NavigationService.TeleportOnlyAsync(fallbackId);
+                        }
                     }
                 }
                 else
@@ -448,6 +373,67 @@ public class TreasureHuntOrchestrator : IDisposable
             _cts?.Dispose();
             _cts = null;
         }
+    }
+
+    /// <summary>
+    /// 通过名称查找 G18 地场节点水晶的 ID
+    /// 不依赖领土ID，直接按名称匹配（更准确）
+    /// </summary>
+    private uint FindG18AetheryteByName(string aetheryteName)
+    {
+        try
+        {
+            var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
+            foreach (var a in unlocked)
+            {
+                if (a.name.Contains(aetheryteName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return a.aetheryteId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"查找G18水晶失败: {ex.Message}");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 查找任意一个 G18 地场节点水晶（作为回退）
+    /// 优先级：忆 > 火 > 风
+    /// </summary>
+    private uint FindAnyG18Aetheryte()
+    {
+        try
+        {
+            var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
+            var g18Aetherytes = unlocked.FindAll(a => 
+                a.name.Contains("地场节点", StringComparison.OrdinalIgnoreCase));
+
+            // 优先级：忆 > 火 > 风
+            var priority = new[] { "忆", "火", "风" };
+            foreach (var kw in priority)
+            {
+                foreach (var a in g18Aetherytes)
+                {
+                    if (a.name.Contains(kw))
+                    {
+                        return a.aetheryteId;
+                    }
+                }
+            }
+
+            if (g18Aetherytes.Count > 0)
+            {
+                return g18Aetherytes[0].aetheryteId;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"查找G18回退水晶失败: {ex.Message}");
+        }
+        return 0;
     }
 
     private bool HasMapInInventory()

@@ -176,7 +176,7 @@ public class MapPurchaseService : IDisposable
             var debugInfoBefore = PdrMarketHelper.GetDebugInfo();
             Plugin.Log.Debug($"PDR 打开前状态:\n{debugInfoBefore}");
 
-            var resultsLoaded = await PdrMarketHelper.WaitForSearchResults(12000, token);
+            var resultsLoaded = await PdrMarketHelper.WaitForSearchResults(4000, token);
 
             var debugInfoAfter = PdrMarketHelper.GetDebugInfo();
             Plugin.Log.Debug($"PDR 等待后状态:\n{debugInfoAfter}");

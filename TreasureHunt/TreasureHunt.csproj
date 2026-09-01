@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.CN.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.1.5.0</Version>
+    <Version>0.1.6.0</Version>
     <Author>wenliang110</Author>
     <Name>TreasureHunt</Name>
     <Punchline>FF14 自动挖宝插件 - 藏宝图全流程自动化</Punchline>
