@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*.*.*.*'
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -44,17 +46,23 @@ jobs:
       run: |
         Compress-Archive -Path ./build/* -DestinationPath TreasureHunt.zip
 
-    - name: Extract version from tag
+    - name: Extract version from csproj
       id: version
       shell: pwsh
       run: |
-        $tag = "${{ github.ref_name }}"
-        $version = $tag.TrimStart('v')
-        Write-Host "Version: $version"
-        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-        echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+        $csproj = Get-Content "./TreasureHunt/TreasureHunt.csproj" -Raw
+        if ($csproj -match '<Version>(.*?)</Version>') {
+          $version = $matches[1]
+          Write-Host "Version: $version"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "TAG=v$version" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Error "Failed to extract version from csproj"
+          exit 1
+        }
 
     - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.version.outputs.TAG }}
