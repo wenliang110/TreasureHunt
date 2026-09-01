@@ -115,6 +115,11 @@ public sealed unsafe class Plugin : IDalamudPlugin
             DebugDependencies();
             return;
         }
+        if (subArgs.StartsWith("ui"))
+        {
+            DebugUi(subArgs);
+            return;
+        }
         ToggleMainUi();
     }
 
@@ -166,6 +171,40 @@ public sealed unsafe class Plugin : IDalamudPlugin
             var s = kv.Value;
             ChatGui.Print($"  {s.DisplayName}: {(s.IsAvailable ? "OK" : "未检测到")}{(s.IsRequired ? " (必需)" : "")}");
         }
+    }
+
+    private void DebugUi(string subArgs)
+    {
+        // /thunt ui - 列出当前可见的 PDR 相关 addon + 底层 API 状态
+        ChatGui.Print("[TreasureHunt] === PDR 市场检测 ===");
+
+        var addonName = PdrMarketHelper.GetMarketAddonName();
+        if (!string.IsNullOrEmpty(addonName))
+        {
+            ChatGui.Print($"  原生市场窗口: {addonName}");
+        }
+        else
+        {
+            ChatGui.Print("  原生市场窗口: 未检测到(PDR是ImGui窗口，正常)");
+        }
+
+        var visible = PdrMarketHelper.ListVisibleAddons();
+        if (visible.Count > 0)
+        {
+            ChatGui.Print($"  可见原生窗口: {string.Join(", ", visible)}");
+        }
+
+        ChatGui.Print("  ---");
+        ChatGui.Print("  [底层 API 状态]");
+        var debugInfo = PdrMarketHelper.GetDebugInfo();
+        foreach (var line in debugInfo.Split('\n'))
+        {
+            ChatGui.Print($"  {line}");
+        }
+
+        ChatGui.Print("  ---");
+        ChatGui.Print("  用法: 先用 /pdr market <物品ID> 打开市场");
+        ChatGui.Print("  再用 /thunt ui 查看底层数据是否加载");
     }
 
     public void ToggleConfigUi() => ConfigWindow.Toggle();
