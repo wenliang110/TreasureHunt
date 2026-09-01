@@ -6,7 +6,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Memoris",
-    "nearestAetheryteNameCN": "记忆节点·记忆"
+    "nearestAetheryteNameCN": "地场节点·忆"
   },
   {
     "id": 2,
@@ -15,7 +15,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Memoris",
-    "nearestAetheryteNameCN": "记忆节点·记忆"
+    "nearestAetheryteNameCN": "地场节点·忆"
   },
   {
     "id": 3,
@@ -24,7 +24,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Wind",
-    "nearestAetheryteNameCN": "记忆节点·风"
+    "nearestAetheryteNameCN": "地场节点·风"
   },
   {
     "id": 4,
@@ -33,7 +33,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Wind",
-    "nearestAetheryteNameCN": "记忆节点·风"
+    "nearestAetheryteNameCN": "地场节点·风"
   },
   {
     "id": 5,
@@ -42,7 +42,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Wind",
-    "nearestAetheryteNameCN": "记忆节点·风"
+    "nearestAetheryteNameCN": "地场节点·风"
   },
   {
     "id": 6,
@@ -51,7 +51,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Fire",
-    "nearestAetheryteNameCN": "记忆节点·火"
+    "nearestAetheryteNameCN": "地场节点·火"
   },
   {
     "id": 7,
@@ -60,7 +60,7 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Fire",
-    "nearestAetheryteNameCN": "记忆节点·火"
+    "nearestAetheryteNameCN": "地场节点·火"
   },
   {
     "id": 8,
@@ -69,6 +69,6 @@
     "territoryId": 1185,
     "nearestAetheryteId": 0,
     "nearestAetheryteName": "Leynode Memoris",
-    "nearestAetheryteNameCN": "记忆节点·记忆"
+    "nearestAetheryteNameCN": "地场节点·忆"
   }
 ]
