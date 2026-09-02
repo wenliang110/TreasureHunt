@@ -218,9 +218,13 @@ public class MapPurchaseService : IDisposable
 
     /// <summary>
     /// 使用 InfoProxyItemSearch 底层 API 搜索物品
-    /// 参考 Daily Routines 反编译代码:
-    ///   EndRequest() → SearchItemId = itemID → RequestData() → 等待数据
-    ///   → Listings 读取上架列表
+    /// 参考 Daily Routines (PDR/BetterMarketBoard) 反编译代码:
+    ///   EndRequest() → SearchItemId = itemID → RequestData() → 等待 IsFullyReceived
+    ///   → Listings 读取上架列表（包含 PricePerUnit/Quantity）
+    /// 关键修复:
+    ///   1. 必须先调用 EndRequest() 清除之前搜索的缓存数据
+    ///   2. 必须调用 RequestData() 发送搜索请求（不能只 Show()）
+    ///   3. 必须等待 IsFullyReceived() 返回 true（不能只检查 ListingCount > 0）
     /// </summary>
     private async Task<(bool success, List<MarketListing> listings)> SearchViaInfoProxy(CancellationToken token)
     {
@@ -238,21 +242,22 @@ public class MapPurchaseService : IDisposable
                     return (false, new List<MarketListing>());
                 }
 
-                // 设置搜索物品 ID
+                // 步骤1: 结束之前的搜索请求（参考 PDR: EndRequest()）
+                infoProxy->EndRequest();
+
+                // 步骤2: 设置搜索物品 ID
                 infoProxy->SearchItemId = itemId;
 
-                // 通过 AgentItemSearch 触发搜索请求
-                var agent = AgentItemSearch.Instance();
-                if (agent != null)
-                {
-                    agent->Show();
-                }
-
-                OnLog?.Invoke("搜索请求已发送，等待服务器响应...");
+                // 步骤3: 发送搜索请求到服务器（参考 PDR: RequestData()）
+                // 注意: 只调用 agent->Show() 不会发送搜索请求!
+                var requestOk = infoProxy->RequestData();
+                OnLog?.Invoke($"搜索请求已发送 (RequestData={requestOk})，等待服务器响应...");
             }
 
-            // 等待数据返回
+            // 步骤4: 等待数据完全接收（参考 PDR: IsFullyReceived(itemID)）
+            // 关键: 不能只检查 ListingCount > 0，因为 ListingCount 可能先于实际数据被设置
             var waitStart = DateTime.Now;
+            var reportedCount = false;
             while ((DateTime.Now - waitStart).TotalSeconds < 15)
             {
                 token.ThrowIfCancellationRequested();
@@ -260,17 +265,30 @@ public class MapPurchaseService : IDisposable
                 unsafe
                 {
                     var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
-                    if (infoProxy != null && infoProxy->ListingCount > 0)
+                    if (infoProxy != null)
                     {
-                        OnLog?.Invoke($"服务器数据已返回，上架数量: {infoProxy->ListingCount}");
-                        break;
+                        // 先报告上架数量（用于调试）
+                        if (!reportedCount && infoProxy->ListingCount > 0)
+                        {
+                            OnLog?.Invoke($"服务器数据已返回，上架数量: {infoProxy->ListingCount}");
+                            reportedCount = true;
+                        }
+
+                        // 必须等待数据完全接收
+                        // 参考 PDR: IsFullyReceived(itemID)，但该方法在我们版本不可用
+                        // 替代方案: 等待 ListingCount > 0 且 EntryCount >= ListingCount
+                        if (infoProxy->ListingCount > 0 && infoProxy->EntryCount >= infoProxy->ListingCount)
+                        {
+                            OnLog?.Invoke("上架数据已完全接收");
+                            break;
+                        }
                     }
                 }
 
                 await Task.Delay(500, token);
             }
 
-            // 读取上架列表
+            // 步骤5: 读取上架列表
             unsafe
             {
                 var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
@@ -286,13 +304,29 @@ public class MapPurchaseService : IDisposable
                 for (int i = 0; i < (int)infoProxy->ListingCount && i < listings.Length; i++)
                 {
                     var l = listings[i];
-                    result.Add(new MarketListing
+                    var listing = new MarketListing
                     {
                         PricePerUnit = l.UnitPrice,
                         Quantity = l.Quantity,
                         IsHq = l.IsHqItem,
                         RetainerId = l.RetainerId,
-                    });
+                    };
+
+                    // 调试: 记录前3个上架项的详细信息
+                    if (i < 3)
+                        OnLog?.Invoke($"上架[{i}]: 价格={listing.PricePerUnit} 数量={listing.Quantity} HQ={listing.IsHq}");
+
+                    // 跳过无效上架（价格为0或数量为0）
+                    if (listing.PricePerUnit == 0 || listing.Quantity == 0)
+                        continue;
+
+                    result.Add(listing);
+                }
+
+                if (result.Count == 0)
+                {
+                    OnLog?.Invoke($"所有上架项数据无效（共{infoProxy->ListingCount}条，但价格/数量均为0）");
+                    return (false, new List<MarketListing>());
                 }
 
                 result.Sort((a, b) => a.PricePerUnit.CompareTo(b.PricePerUnit));

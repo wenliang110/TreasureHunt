@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.2.3.0 - 修复主城传送不生效的严重问题\n1. 修复 GetUnlockedAetherytesWithNames 名称获取失败: 4层回退策略(直接RowId访问→AethernetName→IsValid→ID回退)\n2. 新增主城水晶ID常量: 利姆萨/格里达尼亚/乌尔达哈/伊修加德/神拳痕/水晶都/沙利亚恩/图莱尤拉\n3. 新增 IsMainCityAetheryte/GetMainCityPriority: 基于水晶ID直接匹配主城(不受语言/名称格式影响)\n4. 改进 OpenMarketBoard: 方式1用ID匹配→方式2用名称匹配(中日英三语关键词)\n5. 改进日志: 前5个水晶信息输出到屏幕日志(便于调试)\n6. 简化传送等待: 使用 AsyncHelper.WaitForTeleportCompleteAsync 统一模式",
-    "AssemblyVersion": "0.2.3.0",
+    "Changelog": "v0.2.4.0 - 修复购买价格为0的问题\n1. 修复搜索流程: 必须调用 EndRequest() 清除缓存 + RequestData() 发送搜索请求(参考PDR反编译)\n2. 修复数据读取: 等待 EntryCount >= ListingCount 确保数据完全接收后再读取\n3. 新增调试日志: 前3个上架项的价格/数量/HQ详细信息输出到屏幕\n4. 新增无效数据过滤: 跳过价格为0或数量为0的无效上架项\n5. 移除无效的 agent->Show() 调用(不会发送搜索请求)",
+    "AssemblyVersion": "0.2.4.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.3.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.3.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.4.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.4.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788570000"
+    "LastUpdate": "1788580000"
   }
 ]
