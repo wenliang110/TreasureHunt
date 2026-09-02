@@ -79,42 +79,54 @@ public static unsafe class AetheryteHelper
     /// <summary>
     /// 传送到指定水晶 ID
     /// </summary>
-    public static bool TeleportToAetheryte(uint aetheryteId)
+    public static bool TeleportToAetheryte(uint aetheryteId, Action<string>? onLog = null)
     {
         try
         {
             // 1. 检查本地玩家
             if (Control.GetLocalPlayer() == null)
             {
-                Plugin.Log.Warning("传送失败: 本地玩家为空");
+                onLog?.Invoke("传送失败: 本地玩家为空");
                 return false;
+            }
+
+            // 1.5 下坐骑（骑乘状态可能导致传送技能不可用）
+            if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
+            {
+                onLog?.Invoke("检测到骑乘坐骑，先下坐骑...");
+                ActionManager.Instance()->UseAction(ActionType.GeneralAction, 23);
+                System.Threading.Thread.Sleep(1000);
             }
 
             // 2. 检查传送技能是否可用 (Action 5 = Teleport)
             var status = ActionManager.Instance()->GetActionStatus(ActionType.Action, 5);
             if (status != 0)
             {
-                Plugin.Log.Warning($"传送技能不可用，状态码: {status}");
+                onLog?.Invoke($"传送技能不可用 (状态码={status})，可能处于战斗/骑乘/副本中");
                 return false;
             }
 
             // 3. 检查是否正在传送中
             if (IsTeleporting())
             {
-                Plugin.Log.Warning("正在传送中，忽略新的传送请求");
+                onLog?.Invoke("正在传送中，忽略新的传送请求");
                 return false;
             }
 
             // 4. 刷新水晶列表
             if (!RefreshAetheryteList())
             {
-                Plugin.Log.Warning("刷新水晶列表失败");
+                onLog?.Invoke("刷新水晶列表失败");
                 return false;
             }
 
             // 5. 在列表中查找目标水晶，获取 SubIndex
             var telepo = Telepo.Instance();
-            if (telepo == null) return false;
+            if (telepo == null)
+            {
+                onLog?.Invoke("Telepo 实例为空");
+                return false;
+            }
 
             byte subIndex = 0;
             bool found = false;
@@ -130,18 +142,18 @@ public static unsafe class AetheryteHelper
 
             if (!found)
             {
-                Plugin.Log.Warning($"水晶 {aetheryteId} 未在传送列表中找到");
+                onLog?.Invoke($"水晶 ID={aetheryteId} 未在传送列表中找到");
                 return false;
             }
 
             // 6. 执行传送
             var result = telepo->Teleport(aetheryteId, subIndex);
-            Plugin.Log.Information($"传送结果: {result} (水晶ID={aetheryteId}, SubIndex={subIndex})");
+            onLog?.Invoke($"传送指令结果: {result} (水晶ID={aetheryteId}, SubIndex={subIndex})");
             return result;
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"传送失败: {ex.Message}");
+            onLog?.Invoke($"传送异常: {ex.Message}");
             return false;
         }
     }

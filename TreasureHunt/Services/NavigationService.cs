@@ -159,7 +159,7 @@ public class NavigationService : IDisposable
             State = NavigationState.Teleporting;
             OnLog?.Invoke($"传送到水晶 ID: {aetheryteId}");
 
-            if (!AetheryteHelper.TeleportToAetheryte(aetheryteId))
+            if (!AetheryteHelper.TeleportToAetheryte(aetheryteId, OnLog))
                 return new NavigationResult { Success = false, ErrorMessage = "传送指令失败" };
 
             State = NavigationState.WaitingForLoad;
@@ -201,15 +201,14 @@ public class NavigationService : IDisposable
             return false;
         }
 
-        OnLog?.Invoke($"选择水晶 ID: {nearestAetheryteId}");
+        OnLog?.Invoke($"选择水晶 ID: {nearestAetheryteId} ({AetheryteHelper.GetAetheryteName(nearestAetheryteId)})");
 
         // 检查传送费用
         var cost = AetheryteHelper.GetTeleportCost(nearestAetheryteId);
         OnLog?.Invoke($"传送费用: {cost} gil");
 
-        if (!AetheryteHelper.TeleportToAetheryte(nearestAetheryteId))
+        if (!AetheryteHelper.TeleportToAetheryte(nearestAetheryteId, OnLog))
         {
-            OnLog?.Invoke("传送失败");
             return false;
         }
 
