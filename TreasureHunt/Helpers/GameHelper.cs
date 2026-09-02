@@ -90,4 +90,80 @@ public static unsafe class GameHelper
             System.Threading.Thread.Sleep(100);
         }
     }
+
+    /// <summary>
+    /// 检查 SelectString 对话框是否打开
+    /// 参考 NightmareXIV SelectString 插件和 vsatisfy Game.cs
+    /// 用于交互 NPC/对象后出现的选择菜单
+    /// </summary>
+    public static bool IsSelectStringOpen()
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectString");
+        return addon != null && addon->IsVisible && addon->IsReady;
+    }
+
+    /// <summary>
+    /// 选择 SelectString 对话框中的指定选项
+    /// 参考 vsatisfy: FireCallback 方式选择选项
+    /// </summary>
+    public static void SelectStringOption(int index)
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectString");
+        if (addon != null && addon->IsReady)
+        {
+            AtkValue val = default;
+            val.SetInt(index);
+            addon->FireCallback(1, &val, true);
+        }
+    }
+
+    /// <summary>
+    /// 等待 SelectString 出现并选择指定选项
+    /// 参考 AutoDuty: 等待对话框出现后自动选择
+    /// </summary>
+    public static bool WaitForSelectStringAndSelect(int index, int timeoutMs = 5000)
+    {
+        var startTime = DateTime.Now;
+        while ((DateTime.Now - startTime).TotalMilliseconds < timeoutMs)
+        {
+            if (IsSelectStringOpen())
+            {
+                System.Threading.Thread.Sleep(200);
+                SelectStringOption(index);
+                return true;
+            }
+            System.Threading.Thread.Sleep(100);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 检查是否在过场动画中
+    /// 参考 TextAdvance: 检测过场动画状态
+    /// </summary>
+    public static bool IsCutsceneActive()
+    {
+        var cond = Plugin.Condition;
+        return cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedInCutSceneEvent] ||
+               cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.WatchingCutscene];
+    }
+
+    /// <summary>
+    /// 获取聚焦的 UI 插件 ID
+    /// 参考 vsatisfy: GetFocusedAddonByID
+    /// </summary>
+    public static AtkUnitBase* GetFocusedAddonByID(uint id)
+    {
+        var unitManager = &AtkStage.Instance()->RaptureAtkUnitManager->AtkUnitManager.FocusedUnitsList;
+        for (int j = 0; j < Math.Min(unitManager->Count, unitManager->Entries.Length); j++)
+        {
+            var unitBase = unitManager->Entries[j].Value;
+            if (unitBase != null && unitBase->Id == id)
+            {
+                return unitBase;
+            }
+        }
+        return null;
+    }
 }
+

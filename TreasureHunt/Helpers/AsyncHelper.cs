@@ -114,4 +114,39 @@ public static class AsyncHelper
         await Task.Delay(1500, token);
         return true;
     }
+
+    /// <summary>
+    /// 等待过场动画完成
+    /// 参考 TextAdvance: 检测过场动画开始→结束
+    /// 用于交互宝箱/传送门后可能触发的过场动画
+    /// </summary>
+    public static async Task<bool> WaitForCutsceneAsync(CancellationToken token, int timeoutMs = 30000)
+    {
+        // 等待过场动画开始（短暂等待，可能没有过场动画）
+        var started = await WaitUntilAsync(
+            () => GameHelper.IsCutsceneActive(),
+            "等待过场动画",
+            token,
+            5000,
+            200);
+
+        if (!started)
+            return true; // 没有过场动画，继续执行
+
+        // 等待过场动画结束
+        var ended = await WaitUntilAsync(
+            () => !GameHelper.IsCutsceneActive(),
+            "等待过场动画结束",
+            token,
+            timeoutMs,
+            500);
+
+        if (ended)
+        {
+            await Task.Delay(1000, token);
+            return true;
+        }
+
+        return false;
+    }
 }

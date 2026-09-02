@@ -307,6 +307,7 @@ public static unsafe class AetheryteHelper
     /// <summary>
     /// 检查是否正在传送中
     /// 参考 vsatisfy: 同时检查 IsCastingTeleport 和 BetweenAreas
+    /// 参考 Lifestream: 检查以太网传送状态
     /// </summary>
     public static bool IsTeleporting()
     {
@@ -314,6 +315,41 @@ public static unsafe class AetheryteHelper
                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas51] ||
                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedInCutSceneEvent] ||
                GameHelper.IsCastingTeleport();
+    }
+
+    /// <summary>
+    /// 检查 Lifestream 插件是否可用
+    /// 参考 Lifestream: 用于优化以太网传送
+    /// </summary>
+    public static bool IsLifestreamAvailable()
+    {
+        try
+        {
+            var ipc = Plugin.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsReady");
+            return ipc.InvokeFunc();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 尝试使用 Lifestream 传送到指定以太网
+    /// 参考 Lifestream IPC: 可以更精确地传送到以太网碎片
+    /// </summary>
+    public static bool TryLifestreamTeleport(uint aetheryteId)
+    {
+        try
+        {
+            if (!IsLifestreamAvailable()) return false;
+            var ipc = Plugin.PluginInterface.GetIpcSubscriber<uint, bool>("Lifestream.Teleport");
+            return ipc.InvokeFunc(aetheryteId);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

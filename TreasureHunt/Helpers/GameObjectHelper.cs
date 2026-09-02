@@ -99,6 +99,13 @@ public static unsafe class GameObjectHelper
                 GameHelper.AdvanceTalkUntilClosed();
             }
 
+            // 参考 AutoDuty/SelectString: 交互后可能出现选择菜单
+            // 选择第一个选项（通常是"是"/"确定"）
+            if (GameHelper.IsSelectStringOpen())
+            {
+                GameHelper.SelectStringOption(0);
+            }
+
             return true;
         }
         catch (Exception ex)

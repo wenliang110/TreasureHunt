@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.2.1.0 - 参考 vsatisfy 插件模式改进\n1. 新增 GameHelper: IsTerritoryLoaded(TerritoryLoadState==2)比BetweenAreas更精确的区域加载检测\n2. 新增 IsCastingTeleport: 检测玩家正在施放传送(ActionId==5)\n3. 新增 ProgressTalk/AdvanceTalkUntilClosed: 交互后自动推进NPC对话框\n4. 改进 AsyncHelper: WaitForTeleportCompleteAsync 使用 IsTerritoryLoaded+IsInteractable 精确检测\n5. 改进 AsyncHelper: WaitForAreaReadyAsync 增加 TerritoryLoaded 和 Interactable 检查\n6. 改进 AetheryteHelper: IsTeleporting 增加 IsCastingTeleport 检测\n7. 改进 GameObjectHelper: InteractWithObject 交互后自动推进 Talk 对话框",
-    "AssemblyVersion": "0.2.1.0",
+    "Changelog": "v0.2.2.0 - 参考16个插件库中多种自动化插件模式\n1. 新增 GameHelper.SelectString: 自动检测并选择 SelectString 对话框选项(参考AutoDuty/SelectString/vsatisfy)\n2. 新增 GameHelper.IsCutsceneActive: 过场动画状态检测(参考TextAdvance)\n3. 新增 GameHelper.GetFocusedAddonByID: 获取聚焦UI插件(参考vsatisfy)\n4. 新增 AsyncHelper.WaitForCutsceneAsync: 等待过场动画开始→结束(参考TextAdvance)\n5. 新增 AetheryteHelper Lifestream IPC集成: 检测Lifestream可用性+IPC传送(参考Lifestream)\n6. 改进 GameObjectHelper.InteractWithObject: 交互后自动处理SelectString选择菜单\n7. 参考插件: AutoDuty(副本自动化), BOCCHI(宝箱追踪), Lifestream(传送优化), TextAdvance(对话跳过)",
+    "AssemblyVersion": "0.2.2.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.1.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.1.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.2.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.2.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788540000"
+    "LastUpdate": "1788560000"
   }
 ]
