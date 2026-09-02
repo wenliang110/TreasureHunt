@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.2.4.0 - 修复购买价格为0的问题\n1. 修复搜索流程: 必须调用 EndRequest() 清除缓存 + RequestData() 发送搜索请求(参考PDR反编译)\n2. 修复数据读取: 等待 EntryCount >= ListingCount 确保数据完全接收后再读取\n3. 新增调试日志: 前3个上架项的价格/数量/HQ详细信息输出到屏幕\n4. 新增无效数据过滤: 跳过价格为0或数量为0的无效上架项\n5. 移除无效的 agent->Show() 调用(不会发送搜索请求)",
-    "AssemblyVersion": "0.2.4.0",
+    "Changelog": "v0.2.5.0 - 修复解读藏宝图被阻止的问题\n1. 修复: 移除 HasDecipheredMap() 中的 NextMapAllowanceTimestamp 检查(这是采集冷却18小时,不是解读状态,导致解读永远被阻止)\n2. 改进: 已有解读过的地图时不再报错,而是直接读取已有 flag marker 坐标并继续流程\n3. 改进: 如果已有 flag marker 但读取失败,自动继续尝试重新解读",
+    "AssemblyVersion": "0.2.5.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.4.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.4.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.5.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.5.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788580000"
+    "LastUpdate": "1788590000"
   }
 ]

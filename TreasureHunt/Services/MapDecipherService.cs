@@ -99,6 +99,7 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 解读藏宝图
+    /// 如果已有解读过的地图（flag marker 存在），直接读取已有数据，不重复解读
     /// </summary>
     public async Task<DecipherResult> DecipherMapAsync()
     {
@@ -107,11 +108,32 @@ public class MapDecipherService : IDisposable
 
         try
         {
-            // 检查是否已有解读中的地图
+            // 检查是否已有解读过的地图（flag marker 存在）
             if (HasDecipheredMap())
             {
-                OnLog?.Invoke("已有一张解读过的地图，先处理它");
-                return new DecipherResult { Success = false, ErrorMessage = "已有一张解读过的地图" };
+                OnLog?.Invoke("检测到已有解读过的地图，直接读取坐标");
+
+                // 直接读取已有 flag marker 数据
+                var existingMapData = ReadDecipheredMap(token);
+                if (existingMapData != null)
+                {
+                    var existingMatchedLoc = MapLocationDatabase.FindByCoordinates(
+                        existingMapData.Location?.MapX ?? 0,
+                        existingMapData.Location?.MapY ?? 0);
+
+                    if (existingMatchedLoc != null)
+                        OnLog?.Invoke($"匹配到点位: ({existingMatchedLoc.MapX}, {existingMatchedLoc.MapY}) 水晶: {existingMatchedLoc.NearestAetheryteNameCN}");
+
+                    return new DecipherResult
+                    {
+                        Success = true,
+                        MapData = existingMapData,
+                        MatchedLocation = existingMatchedLoc
+                    };
+                }
+
+                // flag marker 存在但读取失败，继续尝试重新解读
+                OnLog?.Invoke("读取已有地图数据失败，尝试重新解读...");
             }
 
             // 查找未解读的藏宝图
@@ -207,36 +229,14 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 检查玩家是否有一张已解读的地图。
-    /// 解读后的藏宝图会在 AgentMap 上设置一个 flag marker（FlagMarkerCount > 0），
-    /// 同时 UIState 会记录下一次可解读的时间戳 (NextMapAllowanceTimestamp)。
+    /// 解读后的藏宝图会在 AgentMap 上设置一个 flag marker（FlagMarkerCount > 0）。
+    /// 注意: NextMapAllowanceTimestamp 是采集藏宝图的18小时冷却，不是解读状态，不能用来判断是否已解读。
     /// </summary>
     public unsafe bool HasDecipheredMap()
     {
-        // 优先检查 AgentMap 上的 flag marker —— 解读后游戏会放置一个旗帜标记
+        // 检查 AgentMap 上的 flag marker —— 解读后游戏会放置一个旗帜标记
         if (TryGetFlagMarker(out _, out _))
             return true;
-
-        // 回退：检查 UIState 的下一次藏宝图解读时间戳。
-        // 当玩家解读了一张图，NextMapAllowanceTimestamp 会被设置为 18 小时后的时间；
-        // 若时间戳大于当前 Unix 时间，说明玩家有一张正在冷却中的藏宝图。
-        try
-        {
-            var uiState = UIState.Instance();
-            if (uiState != null)
-            {
-                var nextAllowance = uiState->NextMapAllowanceTimestamp;
-                if (nextAllowance > 0)
-                {
-                    var now = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                    if (nextAllowance > now)
-                        return true;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            OnLog?.Invoke($"检查解读状态失败: {ex.Message}");
-        }
 
         return false;
     }
