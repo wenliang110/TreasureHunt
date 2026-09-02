@@ -81,7 +81,19 @@ public sealed unsafe class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        // 关键修复：先取消 Orchestrator，它会传播取消到所有子服务
+        // 必须在所有服务 Dispose 之前调用，确保异步任务能观察到取消信号
         Orchestrator?.Dispose();
+        NavigationService?.Cancel();
+        MapDecipherService?.Cancel();
+        TreasureCofferService?.Cancel();
+        PortalDungeonService?.Cancel();
+        MoneyBagService?.Cancel();
+        MapPurchaseService?.Cancel();
+
+        // 短暂等待异步任务退出
+        System.Threading.Thread.Sleep(200);
+
         MoneyBagService?.Dispose();
         PortalDungeonService?.Dispose();
         TreasureCofferService?.Dispose();

@@ -28,6 +28,7 @@ public class NavigationService : IDisposable
     private readonly Plugin _plugin;
     private CancellationTokenSource? _cts;
     private readonly AdvancedUnstuck _unstuck = new();
+    private volatile bool _emergencyStop;
 
     public event Action<NavigationState>? StateChanged;
     public event Action<string>? OnLog;
@@ -302,11 +303,13 @@ public class NavigationService : IDisposable
         var retryCount = 0;
         const int maxRetries = 3;
         _unstuck.Reset();
+        _emergencyStop = false;
 
         // 使用 MoveToAsync 进行异步导航
-        while ((DateTime.Now - startTime) < timeout)
+        while ((DateTime.Now - startTime) < timeout && !_emergencyStop)
         {
             token.ThrowIfCancellationRequested();
+            if (_emergencyStop) break;
 
             var player = Plugin.ObjectTable.LocalPlayer;
             if (player == null)
@@ -395,13 +398,17 @@ public class NavigationService : IDisposable
 
     public void Cancel()
     {
+        _emergencyStop = true;
         VnavmeshHelper.Stop();
         _cts?.Cancel();
+        _unstuck.Dispose();
     }
 
     public void Dispose()
     {
-        Cancel();
+        _emergencyStop = true;
+        VnavmeshHelper.Stop();
+        _cts?.Cancel();
         _unstuck.Dispose();
     }
 }

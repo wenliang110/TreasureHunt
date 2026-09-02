@@ -1,6 +1,5 @@
 using System;
 using System.Numerics;
-using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
@@ -13,14 +12,15 @@ namespace TreasureHunt.Helpers;
 /// </summary>
 public class AdvancedUnstuck : IDisposable
 {
-    private const double UnstuckDuration = 1.0;
+    private const double UnstuckDuration = 3.0;
     private const double CheckExpiration = 1.0;
     private const float MinMovementDistance = 2.0f;
 
     private Vector3 _lastPosition = Vector3.Zero;
     private DateTime _lastCheckTime = DateTime.MinValue;
     private DateTime _lastUnstuckTime = DateTime.MinValue;
-    private bool _isUnstucking;
+    private volatile bool _isUnstucking;
+    private volatile bool _isDisposed;
     private readonly Random _random = new();
 
     public event Action<string>? OnLog;
@@ -31,13 +31,13 @@ public class AdvancedUnstuck : IDisposable
     /// <param name="isPathing">是否正在寻路</param>
     public unsafe void Check(bool isPathing)
     {
-        if (_isUnstucking)
+        if (_isUnstucking || _isDisposed)
             return;
 
         var now = DateTime.Now;
 
-        // 冷却期（上次恢复后 5 秒内不再检测）
-        if ((now - _lastUnstuckTime).TotalSeconds < 5)
+        // 冷却期（上次恢复后 10 秒内不再检测）
+        if ((now - _lastUnstuckTime).TotalSeconds < 10)
             return;
 
         var player = Plugin.ObjectTable.LocalPlayer;
@@ -97,7 +97,10 @@ public class AdvancedUnstuck : IDisposable
     }
 
     /// <summary>
-    /// 执行恢复动作：先跳，再随机移动
+    /// 执行恢复动作：仅跳跃，不发起后台导航
+    /// 注意：不要在这里发起 fire-and-forget 导航！
+    /// 那会导致无限级联：unstuck导航 → 主循环检测到"正在导航"但没移动 → 再次触发unstuck → 无限循环
+    /// 主循环的 MoveToAsync 调用会处理重新寻路
     /// </summary>
     private unsafe void TryUnstuck()
     {
@@ -108,7 +111,7 @@ public class AdvancedUnstuck : IDisposable
         var isFlying = condition[ConditionFlag.InFlight];
         var isDiving = condition[ConditionFlag.Diving];
 
-        // 1. 先尝试跳跃（参考 GatherBuddy: GeneralAction(2) 跳跃）
+        // 仅尝试跳跃（参考 GatherBuddy: GeneralAction(2) 跳跃）
         if (!isFlying && !isDiving)
         {
             OnLog?.Invoke("尝试跳跃恢复...");
@@ -117,25 +120,6 @@ public class AdvancedUnstuck : IDisposable
             {
                 actionManager->UseAction(ActionType.GeneralAction, 2);
             }
-        }
-
-        // 2. 随机方向移动（参考 GatherBuddy: 25单位随机偏移）
-        var randomAngle = (float)(_random.NextDouble() * Math.PI * 2);
-        var offsetDist = 15.0f + (float)(_random.NextDouble() * 10.0);
-        var offsetX = (float)(Math.Cos(randomAngle) * offsetDist);
-        var offsetZ = (float)(Math.Sin(randomAngle) * offsetDist);
-        var targetPos = new Vector3(
-            player.Position.X + offsetX,
-            player.Position.Y,
-            player.Position.Z + offsetZ
-        );
-
-        OnLog?.Invoke($"随机移动到 ({targetPos.X:F1}, {targetPos.Z:F1})...");
-
-        // 通过 vnavmesh 尝试移动到随机位置（fire-and-forget，避免 sync-over-async）
-        if (VnavmeshHelper.IsAvailable())
-        {
-            _ = Task.Run(() => VnavmeshHelper.MoveToAsync(targetPos, tolerance: 2.0f, fly: false, timeoutMs: 5000));
         }
     }
 
@@ -151,6 +135,6 @@ public class AdvancedUnstuck : IDisposable
 
     public void Dispose()
     {
-        // 无需清理
+        _isDisposed = true;
     }
 }
