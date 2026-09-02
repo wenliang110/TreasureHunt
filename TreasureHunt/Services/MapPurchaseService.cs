@@ -386,33 +386,36 @@ public class MapPurchaseService : IDisposable
                 var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
                 OnLog?.Invoke($"已解锁水晶数量: {unlocked.Count}");
 
-                // 调试：列出前 10 个已解锁水晶的名称
-                for (int i = 0; i < Math.Min(10, unlocked.Count); i++)
+                // 列出前 5 个已解锁水晶的名称（用于调试）
+                for (int i = 0; i < Math.Min(5, unlocked.Count); i++)
                 {
-                    Plugin.Log.Debug($"水晶[{i}]: ID={unlocked[i].aetheryteId} Name={unlocked[i].name} Terr={unlocked[i].territoryId}");
+                    OnLog?.Invoke($"水晶[{i}]: ID={unlocked[i].aetheryteId} Name={unlocked[i].name} Terr={unlocked[i].territoryId}");
                 }
 
+                // 方式1: 使用水晶 ID 直接匹配主城（不受语言/名称格式影响）
                 uint teleportTarget = 0;
                 string cityName = "";
-                // 第一优先：利姆萨·罗敏萨下层甲板（海都，交易板最近）
-                var limsaKeywords = new[] { "利姆萨", "Limsa" };
-                var gridaniaKeywords = new[] { "格里达尼亚", "Gridania" };
-                var uldahKeywords = new[] { "乌尔达哈", "Ul'dah", "Uldah" };
+                int bestPriority = int.MaxValue;
 
-                // 优先1：利姆萨下层甲板（精确匹配关键词组合）
                 foreach (var (id, name, _) in unlocked)
                 {
-                    if (ContainsAny(name, limsaKeywords) && name.Contains("下层", StringComparison.OrdinalIgnoreCase))
+                    var priority = AetheryteHelper.GetMainCityPriority(id);
+                    if (priority > 0 && priority < bestPriority)
                     {
+                        bestPriority = priority;
                         teleportTarget = id;
                         cityName = name;
-                        break;
                     }
                 }
 
-                // 优先2：利姆萨任意区域
+                // 方式2: 如果 ID 匹配失败，回退到名称匹配
                 if (teleportTarget == 0)
                 {
+                    OnLog?.Invoke("ID 匹配未找到主城，尝试名称匹配...");
+                    var limsaKeywords = new[] { "利姆萨", "Limsa", "リムサ" };
+                    var gridaniaKeywords = new[] { "格里达尼亚", "Gridania", "グリダニア" };
+                    var uldahKeywords = new[] { "乌尔达哈", "Ul'dah", "Uldah", "ウルダハ" };
+
                     foreach (var (id, name, _) in unlocked)
                     {
                         if (ContainsAny(name, limsaKeywords))
@@ -422,60 +425,30 @@ public class MapPurchaseService : IDisposable
                             break;
                         }
                     }
-                }
 
-                // 优先3：乌尔达哈现世回廊（交易板近）
-                if (teleportTarget == 0)
-                {
-                    foreach (var (id, name, _) in unlocked)
+                    if (teleportTarget == 0)
                     {
-                        if (ContainsAny(name, uldahKeywords) && name.Contains("现世", StringComparison.OrdinalIgnoreCase))
+                        foreach (var (id, name, _) in unlocked)
                         {
-                            teleportTarget = id;
-                            cityName = name;
-                            break;
+                            if (ContainsAny(name, uldahKeywords))
+                            {
+                                teleportTarget = id;
+                                cityName = name;
+                                break;
+                            }
                         }
                     }
-                }
 
-                // 优先4：乌尔达哈任意区域
-                if (teleportTarget == 0)
-                {
-                    foreach (var (id, name, _) in unlocked)
+                    if (teleportTarget == 0)
                     {
-                        if (ContainsAny(name, uldahKeywords))
+                        foreach (var (id, name, _) in unlocked)
                         {
-                            teleportTarget = id;
-                            cityName = name;
-                            break;
-                        }
-                    }
-                }
-
-                // 优先5：格里达尼亚旧街（交易板近）
-                if (teleportTarget == 0)
-                {
-                    foreach (var (id, name, _) in unlocked)
-                    {
-                        if (ContainsAny(name, gridaniaKeywords) && name.Contains("旧", StringComparison.OrdinalIgnoreCase))
-                        {
-                            teleportTarget = id;
-                            cityName = name;
-                            break;
-                        }
-                    }
-                }
-
-                // 优先6：格里达尼亚任意区域
-                if (teleportTarget == 0)
-                {
-                    foreach (var (id, name, _) in unlocked)
-                    {
-                        if (ContainsAny(name, gridaniaKeywords))
-                        {
-                            teleportTarget = id;
-                            cityName = name;
-                            break;
+                            if (ContainsAny(name, gridaniaKeywords))
+                            {
+                                teleportTarget = id;
+                                cityName = name;
+                                break;
+                            }
                         }
                     }
                 }
@@ -494,58 +467,15 @@ public class MapPurchaseService : IDisposable
                     return false;
                 }
 
-                // 等待传送完成（分阶段）
+                // 等待传送完成（使用 AsyncHelper 统一模式）
                 OnLog?.Invoke("等待区域加载...");
+                await AsyncHelper.WaitForTeleportCompleteAsync(token, 30000);
 
-                // 阶段1: 等待加载画面出现（传送后会有黑屏）
-                var phase1Start = DateTime.Now;
-                var loadingStarted = false;
-                while ((DateTime.Now - phase1Start).TotalSeconds < 15)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(300, token);
-                    if (Plugin.Condition[ConditionFlag.BetweenAreas] ||
-                        Plugin.Condition[ConditionFlag.BetweenAreas51])
-                    {
-                        loadingStarted = true;
-                        break;
-                    }
-                }
-
-                if (!loadingStarted)
-                {
-                    // 没检测到加载画面，可能已经在目标区域或传送失败
-                    OnLog?.Invoke("未检测到加载画面，继续等待...");
-                }
-
-                // 阶段2: 等待加载画面消失
-                var phase2Start = DateTime.Now;
-                while ((DateTime.Now - phase2Start).TotalSeconds < 30)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(500, token);
-                    if (!Plugin.Condition[ConditionFlag.BetweenAreas] &&
-                        !Plugin.Condition[ConditionFlag.BetweenAreas51])
-                    {
-                        break;
-                    }
-                }
-
-                // 阶段3: 等待玩家对象加载
-                var phase3Start = DateTime.Now;
-                while ((DateTime.Now - phase3Start).TotalSeconds < 10)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(500, token);
-                    if (Plugin.ObjectTable.LocalPlayer != null)
-                        break;
-                }
-
-                // 阶段4: 额外等待 5 秒让场景对象完全加载
+                // 额外等待 5 秒让场景对象完全加载
                 OnLog?.Invoke("场景加载中，等待对象刷新...");
                 await Task.Delay(5000, token);
 
-                // 阶段5: 等待 vnavmesh 网格就绪
+                // 等待 vnavmesh 网格就绪
                 var vnavWaitStart = DateTime.Now;
                 while ((DateTime.Now - vnavWaitStart).TotalSeconds < 15)
                 {
@@ -555,7 +485,7 @@ public class MapPurchaseService : IDisposable
                     await Task.Delay(1000, token);
                 }
 
-                // 阶段6: 重试查找交易板（对象可能渐进加载）
+                // 重试查找交易板（对象可能渐进加载）
                 IGameObject? board = null;
                 var retryStart = DateTime.Now;
                 while ((DateTime.Now - retryStart).TotalSeconds < 15)

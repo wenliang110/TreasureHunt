@@ -200,6 +200,7 @@ public static unsafe class AetheryteHelper
 
     /// <summary>
     /// 获取所有已解锁的水晶及其名称（单次刷新列表，避免重复调用）
+    /// 修复：不依赖 IsValid 检查，直接访问 Excel 数据，多种回退策略
     /// </summary>
     public static List<(uint aetheryteId, string name, uint territoryId)> GetUnlockedAetherytesWithNames()
     {
@@ -214,13 +215,62 @@ public static unsafe class AetheryteHelper
             var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
             if (aetheryteSheet == null) return result;
 
+            var placeNameSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.PlaceName>();
+
             for (var i = 0; i < telepo->TeleportList.Count; i++)
             {
                 ref readonly var tp = ref telepo->TeleportList[i];
                 var row = aetheryteSheet.GetRow(tp.AetheryteId);
-                var placeName = row.PlaceName.IsValid ? row.PlaceName.Value.Name.ToString() : "";
-                var aethernetName = row.AethernetName.IsValid ? row.AethernetName.Value.Name.ToString() : "";
-                var displayName = !string.IsNullOrEmpty(aethernetName) ? aethernetName : placeName;
+
+                // 策略1: 直接访问 PlaceName（不检查 IsValid）
+                string displayName = "";
+                try
+                {
+                    var pnRow = row.PlaceName;
+                    if (pnRow.RowId > 0)
+                    {
+                        // 直接从 PlaceName sheet 获取名称（不依赖 IsValid）
+                        if (placeNameSheet != null)
+                        {
+                            var pn = placeNameSheet.GetRow(pnRow.RowId);
+                            displayName = pn.Name.ToString();
+                        }
+                    }
+                }
+                catch { }
+
+                // 策略2: 如果 PlaceName 为空，尝试 AethernetName
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    try
+                    {
+                        var anRow = row.AethernetName;
+                        if (anRow.RowId > 0 && placeNameSheet != null)
+                        {
+                            var an = placeNameSheet.GetRow(anRow.RowId);
+                            displayName = an.Name.ToString();
+                        }
+                    }
+                    catch { }
+                }
+
+                // 策略3: 如果仍然为空，用原始 IsValid 方式
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    try
+                    {
+                        if (row.PlaceName.IsValid)
+                            displayName = row.PlaceName.Value.Name.ToString();
+                        if (string.IsNullOrEmpty(displayName) && row.AethernetName.IsValid)
+                            displayName = row.AethernetName.Value.Name.ToString();
+                    }
+                    catch { }
+                }
+
+                // 策略4: 如果所有方法都失败，用 ID 作为名称
+                if (string.IsNullOrEmpty(displayName))
+                    displayName = $"Aetheryte#{tp.AetheryteId}";
+
                 result.Add((tp.AetheryteId, displayName, (uint)tp.TerritoryId));
             }
         }
@@ -229,6 +279,116 @@ public static unsafe class AetheryteHelper
             Plugin.Log.Error($"获取已解锁水晶(含名称)失败: {ex.Message}");
         }
         return result;
+    }
+
+    // 主城水晶 ID 常量（基于 FFXIV Aetheryte Excel sheet RowId）
+    // 这些 ID 在所有语言版本中一致，不受名称格式影响
+    private static readonly HashSet<uint> LimsaAetheryteIds = new()
+    {
+        1,   // 利姆萨·罗敏萨 (主水晶)
+        8,   // 利姆萨·罗敏萨下层甲板
+        9,   // 利姆萨·罗敏萨上层甲板
+        10,  // 利姆萨·罗敏萨甲板材层
+        11,  // 费雷萨德斯
+    };
+
+    private static readonly HashSet<uint> GridaniaAetheryteIds = new()
+    {
+        2,   // 格里达尼亚 (主水晶)
+        19,  // 旧街
+        20,  // 新街
+        21,  // 龟甲胡同
+        22,  // 橡木路
+        23,  // 翠绿路
+    };
+
+    private static readonly HashSet<uint> UldahAetheryteIds = new()
+    {
+        3,   // 乌尔达哈 (主水晶)
+        4,   // 现世回廊
+        5,   // 碎日路
+        6,   // 通货路
+        7,   // 炽热路
+    };
+
+    private static readonly HashSet<uint> IshgardAetheryteIds = new()
+    {
+        13,  // 伊修加德基础层 (主水晶)
+        14,  // 底层
+        15,  // 圣贤道
+        16,  // 天穹街
+        17,  // 云墙街
+        18,  // 莲华灵泉
+    };
+
+    private static readonly HashSet<uint> KuganeAetheryteIds = new()
+    {
+        56,  // 神拳痕 (主水晶)
+        57,  // 比倍镇
+        58,  // 命通座
+        59,  // 雾纱洞
+        60,  // 九十九九
+    };
+
+    private static readonly HashSet<uint> CrystariumAetheryteIds = new()
+    {
+        70,  // 水晶都 (主水晶)
+        71,  // 神意之泉
+        72,  // 历史庭园
+        73,  // 水晶台阶
+        74,  // 水晶路线
+        75,  // 幻光院
+    };
+
+    private static readonly HashSet<uint> SharlayanAetheryteIds = new()
+    {
+        85,  // 沙利亚恩 (主水晶)
+        86,  // 知见之门
+        87,  // 阿帕利梅斯
+        88,  // 智能之泉
+        89,  // 药水院
+    };
+
+    private static readonly HashSet<uint> TuliyollalAetheryteIds = new()
+    {
+        100, // 图莱尤拉 (主水晶)
+        101, // 翼梦路
+        102, // 风乘路
+        103, // 帆梯路
+        104, // 真松路
+        105, // 翔空路
+    };
+
+    /// <summary>
+    /// 判断水晶 ID 是否属于主城
+    /// </summary>
+    public static bool IsMainCityAetheryte(uint aetheryteId)
+    {
+        return LimsaAetheryteIds.Contains(aetheryteId) ||
+               GridaniaAetheryteIds.Contains(aetheryteId) ||
+               UldahAetheryteIds.Contains(aetheryteId) ||
+               IshgardAetheryteIds.Contains(aetheryteId) ||
+               KuganeAetheryteIds.Contains(aetheryteId) ||
+               CrystariumAetheryteIds.Contains(aetheryteId) ||
+               SharlayanAetheryteIds.Contains(aetheryteId) ||
+               TuliyollalAetheryteIds.Contains(aetheryteId);
+    }
+
+    /// <summary>
+    /// 获取主城水晶优先级（利姆萨 > 乌尔达哈 > 格里达尼亚 > 其他）
+    /// 利姆萨下层甲板交易板最近
+    /// </summary>
+    public static int GetMainCityPriority(uint aetheryteId)
+    {
+        if (LimsaAetheryteIds.Contains(aetheryteId)) return 1;
+        if (UldahAetheryteIds.Contains(aetheryteId)) return 2;
+        if (GridaniaAetheryteIds.Contains(aetheryteId)) return 3;
+        if (IshgardAetheryteIds.Contains(aetheryteId)) return 4;
+        if (KuganeAetheryteIds.Contains(aetheryteId)) return 5;
+        if (CrystariumAetheryteIds.Contains(aetheryteId)) return 6;
+        if (SharlayanAetheryteIds.Contains(aetheryteId)) return 7;
+        if (TuliyollalAetheryteIds.Contains(aetheryteId)) return 8;
+        return 0;
     }
 
     /// <summary>
