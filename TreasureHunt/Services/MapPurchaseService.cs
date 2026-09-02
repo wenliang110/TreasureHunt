@@ -12,6 +12,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using TreasureHunt.Helpers;
 using TreasureHunt.Models;
 
@@ -87,8 +88,6 @@ public class MapPurchaseService : IDisposable
         {
             State = PurchaseState.OpeningMarketBoard;
 
-            // 原生交易板购买（经过 SND 脚本验证的可靠方案）
-            // 记录购买前的藏宝图数量（用于验证购买是否成功）
             int initialMapCount = GetMapCountInInventory();
             OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
 
@@ -101,6 +100,7 @@ public class MapPurchaseService : IDisposable
                 CloseAllMarketWindows();
                 await Task.Delay(500, token);
 
+                // 步骤1：寻路到交易板并交互（激活 ItemSearch Agent）
                 if (!await OpenMarketBoard(token))
                 {
                     OnLog?.Invoke($"打开交易板失败 (尝试 {attempt}/{maxRetries})");
@@ -112,10 +112,13 @@ public class MapPurchaseService : IDisposable
                     continue;
                 }
 
+                // 步骤2：使用 InfoProxyItemSearch 底层 API 搜索（参考 Daily Routines 反编译）
+                // 不需要操作 UI 窗口，直接调用数据代理
                 await WaitAndSetState(PurchaseState.SearchingItem, token);
-                if (!await SearchForMap(token))
+                var (searchOk, listings) = await SearchViaInfoProxy(token);
+                if (!searchOk || listings == null || listings.Count == 0)
                 {
-                    OnLog?.Invoke($"搜索失败 (尝试 {attempt}/{maxRetries})");
+                    OnLog?.Invoke($"搜索失败，未找到上架列表 (尝试 {attempt}/{maxRetries})");
                     if (attempt < maxRetries)
                     {
                         await Task.Delay(2000, token);
@@ -123,30 +126,24 @@ public class MapPurchaseService : IDisposable
                     continue;
                 }
 
-                await WaitAndSetState(PurchaseState.SelectingResult, token);
-                if (!await SelectSearchResult(token))
-                {
-                    OnLog?.Invoke($"选择结果失败 (尝试 {attempt}/{maxRetries})");
-                    if (attempt < maxRetries)
-                    {
-                        await Task.Delay(2000, token);
-                    }
-                    continue;
-                }
-
+                // 步骤3：检查价格
                 await WaitAndSetState(PurchaseState.CheckingPrice, token);
-                var (valid, price) = await CheckPrice(token);
-                if (!valid)
+                var cheapest = listings[0];
+                OnLog?.Invoke($"最低价: {cheapest.PricePerUnit} Gil x{cheapest.Quantity} (HQ={cheapest.IsHq})");
+
+                if (cheapest.PricePerUnit > _plugin.Configuration.MaxPurchasePrice)
                 {
-                    OnLog?.Invoke($"价格检查失败: {price} > {_plugin.Configuration.MaxPurchasePrice}");
+                    OnLog?.Invoke($"价格超出上限: {cheapest.PricePerUnit} > {_plugin.Configuration.MaxPurchasePrice}");
                     CloseAllMarketWindows();
-                    return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
+                    return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({cheapest.PricePerUnit} > {_plugin.Configuration.MaxPurchasePrice})" };
                 }
 
+                // 步骤4：直接发送购买请求包（参考 Daily Routines 的 SendBuyRequest）
                 await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
-                if (!await ConfirmPurchase(token))
+                OnLog?.Invoke($"发送购买请求: {cheapest.PricePerUnit} Gil x1...");
+                if (!PurchaseViaInfoProxy(cheapest))
                 {
-                    OnLog?.Invoke($"确认购买失败 (尝试 {attempt}/{maxRetries})");
+                    OnLog?.Invoke($"购买请求发送失败 (尝试 {attempt}/{maxRetries})");
                     if (attempt < maxRetries)
                     {
                         await Task.Delay(2000, token);
@@ -154,19 +151,19 @@ public class MapPurchaseService : IDisposable
                     continue;
                 }
 
+                // 步骤5：等待购买完成并验证
                 await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
                 await Task.Delay(2500, token);
 
-                // 验证购买是否成功（比较购买前后数量，参考 SND 脚本）
                 int currentMapCount = GetMapCountInInventory();
                 OnLog?.Invoke($"购买后藏宝图数量: {currentMapCount}");
 
                 if (currentMapCount > initialMapCount)
                 {
                     State = PurchaseState.Done;
-                    OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {currentMapCount}，价格: {price}");
+                    OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {currentMapCount}");
                     CloseAllMarketWindows();
-                    return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
+                    return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = (int)cheapest.PricePerUnit };
                 }
                 else
                 {
@@ -206,6 +203,161 @@ public class MapPurchaseService : IDisposable
     {
         _cts?.Cancel();
         State = PurchaseState.Idle;
+    }
+
+    /// <summary>
+    /// 市场上架信息（简化版）
+    /// </summary>
+    public struct MarketListing
+    {
+        public uint PricePerUnit;
+        public uint Quantity;
+        public bool IsHq;
+        public ulong RetainerId;
+    }
+
+    /// <summary>
+    /// 使用 InfoProxyItemSearch 底层 API 搜索物品
+    /// 参考 Daily Routines 反编译代码:
+    ///   EndRequest() → SearchItemId = itemID → RequestData() → 等待数据
+    ///   → Listings 读取上架列表
+    /// </summary>
+    private async Task<(bool success, List<MarketListing> listings)> SearchViaInfoProxy(CancellationToken token)
+    {
+        var itemId = _plugin.Configuration.TreasureMapItemId;
+        OnLog?.Invoke($"InfoProxy 搜索: {SearchKeywordCN} (ID={itemId})");
+
+        try
+        {
+            unsafe
+            {
+                var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
+                if (infoProxy == null)
+                {
+                    OnLog?.Invoke("InfoProxyItemSearch 不可用");
+                    return (false, new List<MarketListing>());
+                }
+
+                // 设置搜索物品 ID
+                infoProxy->SearchItemId = itemId;
+
+                // 通过 AgentItemSearch 触发搜索请求
+                var agent = AgentItemSearch.Instance();
+                if (agent != null)
+                {
+                    agent->Show();
+                }
+
+                OnLog?.Invoke("搜索请求已发送，等待服务器响应...");
+            }
+
+            // 等待数据返回
+            var waitStart = DateTime.Now;
+            while ((DateTime.Now - waitStart).TotalSeconds < 15)
+            {
+                token.ThrowIfCancellationRequested();
+
+                unsafe
+                {
+                    var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
+                    if (infoProxy != null && infoProxy->ListingCount > 0)
+                    {
+                        OnLog?.Invoke($"服务器数据已返回，上架数量: {infoProxy->ListingCount}");
+                        break;
+                    }
+                }
+
+                await Task.Delay(500, token);
+            }
+
+            // 读取上架列表
+            unsafe
+            {
+                var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
+                if (infoProxy == null || infoProxy->ListingCount == 0)
+                {
+                    OnLog?.Invoke("等待数据超时或无上架");
+                    return (false, new List<MarketListing>());
+                }
+
+                // 转换为排序列表（按单价升序，取最低价）
+                var result = new List<MarketListing>();
+                var listings = infoProxy->Listings;
+                for (int i = 0; i < (int)infoProxy->ListingCount && i < listings.Length; i++)
+                {
+                    var l = listings[i];
+                    result.Add(new MarketListing
+                    {
+                        PricePerUnit = l.UnitPrice,
+                        Quantity = l.Quantity,
+                        IsHq = l.IsHqItem,
+                        RetainerId = l.RetainerId,
+                    });
+                }
+
+                result.Sort((a, b) => a.PricePerUnit.CompareTo(b.PricePerUnit));
+                return (true, result);
+            }
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"搜索异常: {ex.Message}");
+            Plugin.Log.Error($"InfoProxy 搜索异常: {ex}");
+            return (false, new List<MarketListing>());
+        }
+    }
+
+    /// <summary>
+    /// 使用 InfoProxyItemSearch 底层 API 购买
+    /// 参考 Daily Routines: SetLastPurchasedItem → SendPurchaseRequestPacket
+    /// </summary>
+    private bool PurchaseViaInfoProxy(MarketListing listing)
+    {
+        try
+        {
+            unsafe
+            {
+                var infoProxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.Instance();
+                if (infoProxy == null)
+                {
+                    OnLog?.Invoke("InfoProxyItemSearch 不可用");
+                    return false;
+                }
+
+                // 遍历 Listings 找到匹配的上架项
+                var listings = infoProxy->Listings;
+                for (int i = 0; i < (int)infoProxy->ListingCount && i < listings.Length; i++)
+                {
+                    var l = listings[i];
+                    if (l.UnitPrice == listing.PricePerUnit && l.RetainerId == listing.RetainerId)
+                    {
+                        OnLog?.Invoke($"匹配到上架项: {l.UnitPrice} Gil x{l.Quantity}");
+
+                        // 使用静态函数指针购买
+                        var itemPtr = &l;
+                        var setOk = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.MemberFunctionPointers.SetLastPurchasedItem(infoProxy, itemPtr);
+                        if (!setOk)
+                        {
+                            OnLog?.Invoke("SetLastPurchasedItem 失败");
+                            return false;
+                        }
+
+                        var sendOk = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyItemSearch.MemberFunctionPointers.SendPurchaseRequestPacket(infoProxy);
+                        OnLog?.Invoke($"购买请求包已发送: {sendOk}");
+                        return sendOk;
+                    }
+                }
+
+                OnLog?.Invoke("未在 Listings 中找到匹配的上架项");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"购买异常: {ex.Message}");
+            Plugin.Log.Error($"InfoProxy 购买异常: {ex}");
+            return false;
+        }
     }
 
     /// <summary>
