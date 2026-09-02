@@ -87,125 +87,102 @@ public class MapPurchaseService : IDisposable
         {
             State = PurchaseState.OpeningMarketBoard;
 
-            // 优先使用 PDR 远程交易板（无需跑到主城）
-            var usePdr = _plugin.Configuration.UsePdrMarket;
-            OnLog?.Invoke($"PDR 模式: 配置启用={usePdr}，将尝试 /pdr market 命令");
+            // 原生交易板购买（经过 SND 脚本验证的可靠方案）
+            // 记录购买前的藏宝图数量（用于验证购买是否成功）
+            int initialMapCount = GetMapCountInInventory();
+            OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
 
-            if (usePdr)
+            const int maxRetries = 3;
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                OnLog?.Invoke("使用 PDR 远程交易板购买...");
-                var pdrResult = await PurchaseMapViaPdr(token);
-                if (pdrResult.Success)
-                {
-                    return pdrResult;
-                }
-                OnLog?.Invoke($"PDR 购买失败: {pdrResult.ErrorMessage}，回退到传统方式...");
-                // PDR 失败后清理可能残留的窗口（PDR 可能打开了 ItemSearch Agent）
+                OnLog?.Invoke($"购买尝试 {attempt}/{maxRetries}");
+
+                // 先关闭所有可能打开的窗口
                 CloseAllMarketWindows();
-                await Task.Delay(1000, token);
-                usePdr = false;
-            }
+                await Task.Delay(500, token);
 
-            // 传统方式：原生交易板 UI 操作（经过 SND 脚本验证的可靠方案）
-            if (!usePdr)
-            {
-                // 记录购买前的藏宝图数量（用于验证购买是否成功）
-                int initialMapCount = GetMapCountInInventory();
-                OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
-
-                const int maxRetries = 3;
-                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                if (!await OpenMarketBoard(token))
                 {
-                    OnLog?.Invoke($"原生交易板购买尝试 {attempt}/{maxRetries}");
+                    OnLog?.Invoke($"打开交易板失败 (尝试 {attempt}/{maxRetries})");
+                    if (attempt < maxRetries)
+                    {
+                        OnLog?.Invoke("等待 3 秒后重试...");
+                        await Task.Delay(3000, token);
+                    }
+                    continue;
+                }
 
-                    // 先关闭所有可能打开的窗口
+                await WaitAndSetState(PurchaseState.SearchingItem, token);
+                if (!await SearchForMap(token))
+                {
+                    OnLog?.Invoke($"搜索失败 (尝试 {attempt}/{maxRetries})");
+                    if (attempt < maxRetries)
+                    {
+                        await Task.Delay(2000, token);
+                    }
+                    continue;
+                }
+
+                await WaitAndSetState(PurchaseState.SelectingResult, token);
+                if (!await SelectSearchResult(token))
+                {
+                    OnLog?.Invoke($"选择结果失败 (尝试 {attempt}/{maxRetries})");
+                    if (attempt < maxRetries)
+                    {
+                        await Task.Delay(2000, token);
+                    }
+                    continue;
+                }
+
+                await WaitAndSetState(PurchaseState.CheckingPrice, token);
+                var (valid, price) = await CheckPrice(token);
+                if (!valid)
+                {
+                    OnLog?.Invoke($"价格检查失败: {price} > {_plugin.Configuration.MaxPurchasePrice}");
                     CloseAllMarketWindows();
-                    await Task.Delay(500, token);
-
-                    if (!await OpenMarketBoard(token))
-                    {
-                        OnLog?.Invoke($"打开交易板失败 (尝试 {attempt}/{maxRetries})");
-                        if (attempt < maxRetries)
-                        {
-                            OnLog?.Invoke("等待 3 秒后重试...");
-                            await Task.Delay(3000, token);
-                        }
-                        continue;
-                    }
-
-                    await WaitAndSetState(PurchaseState.SearchingItem, token);
-                    if (!await SearchForMap(token))
-                    {
-                        OnLog?.Invoke($"搜索失败 (尝试 {attempt}/{maxRetries})");
-                        if (attempt < maxRetries)
-                        {
-                            await Task.Delay(2000, token);
-                        }
-                        continue;
-                    }
-
-                    await WaitAndSetState(PurchaseState.SelectingResult, token);
-                    if (!await SelectSearchResult(token))
-                    {
-                        OnLog?.Invoke($"选择结果失败 (尝试 {attempt}/{maxRetries})");
-                        if (attempt < maxRetries)
-                        {
-                            await Task.Delay(2000, token);
-                        }
-                        continue;
-                    }
-
-                    await WaitAndSetState(PurchaseState.CheckingPrice, token);
-                    var (valid, price) = await CheckPrice(token);
-                    if (!valid)
-                    {
-                        OnLog?.Invoke($"价格检查失败: {price} > {_plugin.Configuration.MaxPurchasePrice}");
-                        CloseAllMarketWindows();
-                        return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
-                    }
-
-                    await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
-                    if (!await ConfirmPurchase(token))
-                    {
-                        OnLog?.Invoke($"确认购买失败 (尝试 {attempt}/{maxRetries})");
-                        if (attempt < maxRetries)
-                        {
-                            await Task.Delay(2000, token);
-                        }
-                        continue;
-                    }
-
-                    await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
-                    await Task.Delay(2500, token);
-
-                    // 验证购买是否成功（比较购买前后数量，参考 SND 脚本）
-                    int currentMapCount = GetMapCountInInventory();
-                    OnLog?.Invoke($"购买后藏宝图数量: {currentMapCount}");
-
-                    if (currentMapCount > initialMapCount)
-                    {
-                        State = PurchaseState.Done;
-                        OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {currentMapCount}，价格: {price}");
-                        CloseAllMarketWindows();
-                        return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
-                    }
-                    else
-                    {
-                        OnLog?.Invoke($"购买后背包数量未增加 (尝试 {attempt}/{maxRetries})");
-                        if (attempt < maxRetries)
-                        {
-                            OnLog?.Invoke("关闭窗口后重试...");
-                            CloseAllMarketWindows();
-                            await Task.Delay(2000, token);
-                        }
-                    }
+                    return new PurchaseResult { Success = false, ErrorMessage = $"价格超出上限({price} > {_plugin.Configuration.MaxPurchasePrice})" };
                 }
 
-                CloseAllMarketWindows();
-                return new PurchaseResult { Success = false, ErrorMessage = $"原生交易板购买失败（已重试{maxRetries}次）" };
+                await WaitAndSetState(PurchaseState.ConfirmingPurchase, token);
+                if (!await ConfirmPurchase(token))
+                {
+                    OnLog?.Invoke($"确认购买失败 (尝试 {attempt}/{maxRetries})");
+                    if (attempt < maxRetries)
+                    {
+                        await Task.Delay(2000, token);
+                    }
+                    continue;
+                }
+
+                await WaitAndSetState(PurchaseState.WaitingForPurchase, token);
+                await Task.Delay(2500, token);
+
+                // 验证购买是否成功（比较购买前后数量，参考 SND 脚本）
+                int currentMapCount = GetMapCountInInventory();
+                OnLog?.Invoke($"购买后藏宝图数量: {currentMapCount}");
+
+                if (currentMapCount > initialMapCount)
+                {
+                    State = PurchaseState.Done;
+                    OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {currentMapCount}，价格: {price}");
+                    CloseAllMarketWindows();
+                    return new PurchaseResult { Success = true, ItemId = TreasureMapConstants.GargantuaskinItemId, Price = price };
+                }
+                else
+                {
+                    OnLog?.Invoke($"购买后背包数量未增加 (尝试 {attempt}/{maxRetries})");
+                    if (attempt < maxRetries)
+                    {
+                        OnLog?.Invoke("关闭窗口后重试...");
+                        CloseAllMarketWindows();
+                        await Task.Delay(2000, token);
+                    }
+                }
             }
 
-            return new PurchaseResult { Success = false, ErrorMessage = "未知错误" };
+            State = PurchaseState.Idle;
+            OnLog?.Invoke("购买失败，已达最大重试次数");
+            return new PurchaseResult { Success = false, ErrorMessage = "购买失败，已达最大重试次数" };
         }
         catch (OperationCanceledException)
         {
@@ -225,179 +202,10 @@ public class MapPurchaseService : IDisposable
         }
     }
 
-    /// <summary>
-    /// 通过 PDR 远程交易板购买藏宝图
-    /// 策略：先用 InfoProxyItemSearch 底层 API 尝试（无声购买），
-    /// 失败则回退到鼠标模拟 Shift+右键点击 PDR 窗口第一个列表项
-    /// 
-    /// 注意：PDR 是 ImGui 窗口，不走原生 InfoProxyItemSearch 购买流程，
-    /// 所以底层 API 购买通常会失败，鼠标模拟是主要购买方式。
-    /// </summary>
-    private async Task<PurchaseResult> PurchaseMapViaPdr(CancellationToken token)
-    {
-        try
-        {
-            var itemId = _plugin.Configuration.TreasureMapItemId;
-            var maxPrice = _plugin.Configuration.MaxPurchasePrice;
-
-            // 记录购买前数量
-            int initialMapCount = GetMapCountInInventory();
-            OnLog?.Invoke($"购买前藏宝图数量: {initialMapCount}");
-
-            // 1. 打开 PDR 市场并搜索物品
-            OnLog?.Invoke($"执行 /pdr market {itemId} ...");
-            PdrMarketHelper.OpenMarket(itemId);
-
-            // 2. 等待 PDR 窗口出现 + 数据加载
-            State = PurchaseState.SearchingItem;
-            OnLog?.Invoke("等待 PDR 市场窗口和数据加载...");
-
-            // 等待 PDR 打开并从服务器获取列表数据
-            // PDR 是 ImGui 窗口，加载需要约 2-4 秒
-            await Task.Delay(4000, token);
-
-            // 3. 先尝试 InfoProxyItemSearch 底层 API 购买
-            // （如果 PDR 激活了原生代理，这种方式最干净）
-            var proxyCount = PdrMarketHelper.GetListingCount();
-            if (proxyCount > 0)
-            {
-                OnLog?.Invoke($"InfoProxyItemSearch 有数据 ({proxyCount}条)，尝试底层 API 购买...");
-
-                var (price, quantity, resultItemId, isValid) = PdrMarketHelper.GetFirstListing();
-                if (isValid && price <= maxPrice)
-                {
-                    State = PurchaseState.ConfirmingPurchase;
-                    OnLog?.Invoke($"最低价格: {price}，尝试 API 直接购买...");
-
-                    bool apiOk = PdrMarketHelper.PurchaseFirstListing((uint)maxPrice);
-                    if (apiOk)
-                    {
-                        State = PurchaseState.WaitingForPurchase;
-                        await Task.Delay(2500, token);
-
-                        // 验证购买
-                        int afterCount = GetMapCountInInventory();
-                        if (afterCount > initialMapCount)
-                        {
-                            State = PurchaseState.Done;
-                            OnLog?.Invoke($"API 购买成功，价格: {price}，数量: {initialMapCount} → {afterCount}");
-                            return new PurchaseResult { Success = true, ItemId = resultItemId, Price = (int)price };
-                        }
-                    }
-                    else
-                    {
-                        OnLog?.Invoke("API 购买失败，回退到鼠标模拟购买...");
-                    }
-                }
-            }
-            else
-            {
-                OnLog?.Invoke("InfoProxyItemSearch 无数据（PDR不走原生流程，正常），使用鼠标模拟购买...");
-            }
-
-            // 4. 鼠标模拟购买：Shift + 右键点击第一个列表项
-            State = PurchaseState.ConfirmingPurchase;
-            OnLog?.Invoke("使用鼠标模拟 Shift+右键购买...");
-            OnLog?.Invoke("注意：鼠标会被自动移动，请不要操作鼠标");
-
-            bool mouseOk = PdrMarketHelper.PurchaseFirstListingByMouse();
-
-            if (!mouseOk)
-            {
-                OnLog?.Invoke("鼠标模拟购买发送失败");
-                return new PurchaseResult { Success = false, ErrorMessage = "鼠标模拟购买失败" };
-            }
-
-            // 5. 等待购买完成
-            State = PurchaseState.WaitingForPurchase;
-            OnLog?.Invoke("购买指令已发送，等待交易完成...");
-            await Task.Delay(3000, token);
-
-            // 6. 验证：比较购买前后数量
-            int finalCount = GetMapCountInInventory();
-            OnLog?.Invoke($"购买后藏宝图数量: {finalCount}");
-
-            if (finalCount > initialMapCount)
-            {
-                State = PurchaseState.Done;
-                OnLog?.Invoke($"购买成功！数量从 {initialMapCount} 增加到 {finalCount}");
-                return new PurchaseResult { Success = true, ItemId = itemId, Price = 0 };
-            }
-            else
-            {
-                OnLog?.Invoke("购买后背包数量未增加，购买可能失败");
-                OnLog?.Invoke("请检查 PDR 窗口是否被遮挡，或点击位置是否正确");
-                return new PurchaseResult { Success = false, ErrorMessage = "鼠标购买后数量未增加" };
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            return new PurchaseResult { Success = false, ErrorMessage = "已取消" };
-        }
-        catch (Exception ex)
-        {
-            OnLog?.Invoke($"PDR 购买异常: {ex.Message}");
-            Plugin.Log.Error($"PDR 购买异常: {ex}");
-            return new PurchaseResult { Success = false, ErrorMessage = ex.Message };
-        }
-    }
-
     public void Cancel()
     {
         _cts?.Cancel();
         State = PurchaseState.Idle;
-    }
-
-    /// <summary>
-    /// 使用 PDR (更好的市场布告板) 打开远程交易板
-    /// 通过 /pdr market &lt;物品ID&gt; 直接打开，无需跑到主城
-    /// PDR 是 ImGui 窗口，检测不到原生 ItemSearch addon
-    /// 但 PDR 可能已激活了 ItemSearch Agent，我们尝试用原生 API 购买
-    /// </summary>
-    private async Task<bool> OpenMarketBoardPdr(CancellationToken token)
-    {
-        try
-        {
-            if (IsMarketBoardOpen())
-            {
-                OnLog?.Invoke("交易板已打开");
-                return true;
-            }
-
-            var itemId = _plugin.Configuration.TreasureMapItemId;
-            OnLog?.Invoke($"执行 /pdr market {itemId} ...");
-
-            PdrMarketHelper.OpenMarket(itemId);
-
-            // 等待 PDR 加载（PDR是ImGui窗口，等它建立市场连接）
-            await Task.Delay(2000, token);
-
-            // 尝试激活原生 ItemSearch Agent
-            // PDR 建立远程连接后，ItemSearch Agent 应该可以工作了
-            OnLog?.Invoke("尝试激活原生 ItemSearch Agent...");
-            OpenItemSearchAgent();
-            await Task.Delay(1500, token);
-
-            if (IsMarketBoardOpen())
-            {
-                OnLog?.Invoke("原生交易板已打开（PDR 远程连接已建立）");
-                return true;
-            }
-
-            // 如果原生窗口没打开，但 Agent 可能已激活，还是可以继续尝试搜索购买
-            OnLog?.Invoke("原生窗口未显示，但继续尝试使用 ItemSearch Agent");
-            return true; // 继续，后续步骤尝试直接用 Agent API
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
-        catch (Exception ex)
-        {
-            OnLog?.Invoke($"PDR 打开交易板失败: {ex.Message}");
-            Plugin.Log.Error($"PDR 打开交易板异常: {ex}");
-            return false;
-        }
     }
 
     /// <summary>
@@ -872,7 +680,7 @@ public class MapPurchaseService : IDisposable
     /// <summary>
     /// 搜索藏宝图（参考 SND 脚本完整流程）
     /// SND: /callback ItemSearch true 9 false false 陈旧的卡冈图亚革地图 46185 false false false
-    /// 流程：1.设置搜索文本 → 2.callback 9 搜索 → 3.等3秒 → 4.callback 5 轮询等待 ItemSearchResult
+    /// 流程：callback 9 搜索 → 等3秒 → callback 5 轮询等待 ItemSearchResult
     /// </summary>
     private async Task<bool> SearchForMap(CancellationToken token)
     {
@@ -881,13 +689,9 @@ public class MapPurchaseService : IDisposable
             var itemId = _plugin.Configuration.TreasureMapItemId;
             OnLog?.Invoke($"搜索藏宝图: {SearchKeywordCN} (ID={itemId})");
 
-            // 步骤1：设置搜索文本（模拟用户在搜索框输入文字）
-            SetSearchTextSafe(SearchKeywordCN);
-            await Task.Delay(500, token);
-
-            // 步骤2：通过 callback 9 执行搜索
+            // 通过 callback 9 搜索（带物品名称和 ID）
             // 参考 SND: /callback ItemSearch true 9 false false 陈旧的卡冈图亚革地图 46185 false false false
-            // 参数：[isHQ=false, isExact=false, itemName, itemId(数字!), unknown=false, unknown=false, unknown=false]
+            // 参数：[isHQ=false, isExact=false, itemName, itemId(数字), unknown=false, unknown=false, unknown=false]
             unsafe
             {
                 var addon = GetItemSearchAddonPtr();
@@ -910,7 +714,7 @@ public class MapPurchaseService : IDisposable
                     atkValues[2].Type = AtkValueType.String;
                     atkValues[2].String = (InteropGenerator.Runtime.CStringPointer)pName;
 
-                    // 物品 ID — SND 脚本传的是数字 46185，不是字符串！
+                    // 物品 ID — SND 脚本传的是数字 46185
                     atkValues[3].Type = AtkValueType.Int;
                     atkValues[3].Int = (int)itemId;
 
@@ -925,13 +729,13 @@ public class MapPurchaseService : IDisposable
                 }
             }
 
-            OnLog?.Invoke("搜索指令已发送");
+            OnLog?.Invoke("搜索指令已发送，等待3秒...");
 
-            // 步骤3：等待搜索结果加载（SND 脚本：yield("/wait 3")）
+            // 等待搜索结果加载（SND 脚本：yield("/wait 3")）
             await Task.Delay(3000, token);
 
-            // 步骤4：轮询等待 ItemSearchResult 窗口出现
-            // 参考 SND: while not ItemSearchResult.Exists do /callback ItemSearch true 5 0 / /wait 0.5/ end
+            // 轮询等待 ItemSearchResult 窗口出现
+            // 参考 SND: while not ItemSearchResult.Exists do /callback ItemSearch true 5 0/ /wait 0.5/ end
             // callback 5 = 选择/点击第一个搜索结果，会打开 ItemSearchResult 窗口
             var waitStart = DateTime.Now;
             var pollCount = 0;
@@ -962,7 +766,7 @@ public class MapPurchaseService : IDisposable
                 await Task.Delay(500, token);
             }
 
-            OnLog?.Invoke("等待搜索结果超时");
+            OnLog?.Invoke($"等待搜索结果超时（轮询{pollCount}次）");
             return IsItemSearchResultOpen();
         }
         catch (Exception ex)

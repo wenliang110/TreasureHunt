@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.1.8.3 - 修复搜索流程：物品ID改为Int类型(原String)；搜索前先设置搜索框文本；搜索后等3秒再轮询(与SND脚本一致)；SelectSearchResult改为确认窗口已打开\nv0.1.8.2 - 修复交易板打开检测：检查addon存在(非IsVisible)；交互后等3秒；超时10秒；关闭用callback -1；PDR失败后清理残留\nv0.1.8.1 - 参考SND脚本全面优化购买与宝箱流程：搜索轮询；SelectYesno弹窗等待；数量对比验证；G18宝箱8个预设位置；宝箱随机移动搜索；传送门随机移动搜索\nv0.1.7.0 - PDR鼠标模拟购买(Shift+右键)；修复传送目的地改用名称匹配\nv0.1.6.0 - 修复传送目的地；PDR失败快速回退主城",
-    "AssemblyVersion": "0.1.8.3",
+    "Changelog": "v0.1.8.4 - 删除PDR购买功能(/pdr market)；简化搜索流程(去掉SetSearchTextSafe，直接callback 9)；搜索后等3秒再轮询(与SND脚本完全一致)\nv0.1.8.3 - 修复搜索：物品ID改为Int类型；搜索前设置文本；搜索后等3秒\nv0.1.8.2 - 修复交易板打开检测：检查addon存在(非IsVisible)；交互后等3秒；超时10秒\nv0.1.8.1 - G18宝箱8个预设位置；宝箱随机移动搜索；传送门随机移动搜索\nv0.1.7.0 - PDR鼠标模拟购买；修复传送目的地\nv0.1.6.0 - 修复传送目的地；PDR失败快速回退主城",
+    "AssemblyVersion": "0.1.8.4",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.8.3/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.8.3/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.8.4/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.8.4/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788503000"
+    "LastUpdate": "1788504000"
   }
 ]
