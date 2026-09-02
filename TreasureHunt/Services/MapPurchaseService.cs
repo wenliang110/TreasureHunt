@@ -100,6 +100,9 @@ public class MapPurchaseService : IDisposable
                     return pdrResult;
                 }
                 OnLog?.Invoke($"PDR 购买失败: {pdrResult.ErrorMessage}，回退到传统方式...");
+                // PDR 失败后清理可能残留的窗口（PDR 可能打开了 ItemSearch Agent）
+                CloseAllMarketWindows();
+                await Task.Delay(1000, token);
                 usePdr = false;
             }
 
@@ -660,9 +663,12 @@ public class MapPurchaseService : IDisposable
                 OpenItemSearchAgent();
             }
 
-            // 等待交易板窗口出现
+            // 参考 SND 脚本：交互后先等 3 秒让窗口加载
+            await Task.Delay(3000, token);
+
+            // 等待交易板窗口出现（参考 SND：轮询 10 秒，每 0.5 秒检查一次）
             var waitStart2 = DateTime.Now;
-            while ((DateTime.Now - waitStart2).TotalSeconds < 5)
+            while ((DateTime.Now - waitStart2).TotalSeconds < 10)
             {
                 token.ThrowIfCancellationRequested();
                 if (IsMarketBoardOpen())
@@ -670,7 +676,7 @@ public class MapPurchaseService : IDisposable
                     OnLog?.Invoke("交易板已打开");
                     return true;
                 }
-                await Task.Delay(200, token);
+                await Task.Delay(500, token);
             }
 
             OnLog?.Invoke("等待交易板打开超时");
@@ -808,15 +814,19 @@ public class MapPurchaseService : IDisposable
     /// <summary>
     /// 检查交易板是否已打开
     /// </summary>
+    /// <summary>
+    /// 检查交易板是否已打开
+    /// 参考 SND 脚本：Addons.GetAddon("ItemSearch").Exists
+    /// 检查 addon 是否存在（Address != Zero），不严格要求 IsVisible
+    /// 因为窗口刚加载时 IsVisible 可能为 false，但 addon 已经存在
+    /// </summary>
     private bool IsMarketBoardOpen()
     {
         var addon = Plugin.GameGui.GetAddonByName("ItemSearch");
         if (addon.Address == IntPtr.Zero) return false;
-        unsafe
-        {
-            var atkUnitBase = (AtkUnitBase*)addon.Address;
-            return atkUnitBase->IsVisible;
-        }
+        // addon 已加载即可视为打开（与 SND 脚本 .Exists 一致）
+        // 不检查 IsVisible，因为窗口加载动画期间 IsVisible 可能为 false
+        return true;
     }
 
     /// <summary>
@@ -1119,30 +1129,27 @@ public class MapPurchaseService : IDisposable
 
     /// <summary>
     /// 检查搜索结果窗口是否已打开
+    /// 参考 SND 脚本：Addons.GetAddon("ItemSearchResult").Exists
+    /// 检查 addon 是否存在，不严格要求 IsVisible
     /// </summary>
     private bool IsItemSearchResultOpen()
     {
         var addon = Plugin.GameGui.GetAddonByName("ItemSearchResult");
         if (addon.Address == IntPtr.Zero) return false;
-        unsafe
-        {
-            var atkUnitBase = (AtkUnitBase*)addon.Address;
-            return atkUnitBase->IsVisible;
-        }
+        // addon 已加载即可视为打开（与 SND 脚本 .Exists 一致）
+        return true;
     }
 
     /// <summary>
     /// 检查 SelectYesno 确认弹窗是否已打开
+    /// 参考 SND 脚本：Addons.GetAddon("SelectYesno").Exists
     /// </summary>
     private bool IsSelectYesnoOpen()
     {
         var addon = Plugin.GameGui.GetAddonByName("SelectYesno");
         if (addon.Address == IntPtr.Zero) return false;
-        unsafe
-        {
-            var atkUnitBase = (AtkUnitBase*)addon.Address;
-            return atkUnitBase->IsVisible;
-        }
+        // addon 已加载即可视为打开（与 SND 脚本 .Exists 一致）
+        return true;
     }
 
     private bool SetSearchTextSafe(string text)
@@ -1256,36 +1263,39 @@ public class MapPurchaseService : IDisposable
     /// <summary>
     /// 关闭所有市场相关窗口（重试前清理）
     /// </summary>
+    /// <summary>
+    /// 关闭所有市场相关窗口
+    /// 参考 SND 脚本：用 callback -1 正确关闭窗口（而不是 Hide）
+    /// SND: /callback ItemSearchResult true -1, /callback ItemSearch true -1, /callback SelectYesno true 1
+    /// </summary>
     private void CloseAllMarketWindows()
     {
         unsafe
         {
-            // 关闭 ItemSearchResult
+            // 关闭 ItemSearchResult（用 callback -1，与 SND 脚本一致）
+            // 不检查 IsVisible，只要 addon 存在就关闭（PDR 可能留下不可见的残留窗口）
             var resultAddon = GetItemSearchResultAddonPtr();
-            if (resultAddon != null && resultAddon->IsVisible)
+            if (resultAddon != null)
             {
-                resultAddon->Hide(true, false, 0);
-                Plugin.Log.Debug("已关闭 ItemSearchResult");
+                resultAddon->FireCallback(unchecked((uint)-1), null, true);
+                Plugin.Log.Debug("已关闭 ItemSearchResult (callback -1)");
             }
 
-            // 关闭 ItemSearch
+            // 关闭 ItemSearch（用 callback -1）
             var searchAddon = GetItemSearchAddonPtr();
-            if (searchAddon != null && searchAddon->IsVisible)
+            if (searchAddon != null)
             {
-                searchAddon->Hide(true, false, 0);
-                Plugin.Log.Debug("已关闭 ItemSearch");
+                searchAddon->FireCallback(unchecked((uint)-1), null, true);
+                Plugin.Log.Debug("已关闭 ItemSearch (callback -1)");
             }
 
-            // 关闭 SelectYesno
+            // 关闭 SelectYesno（用 callback 1 = 选择"否"，与 SND 脚本一致）
             var yesnoAddon = Plugin.GameGui.GetAddonByName("SelectYesno");
             if (yesnoAddon.Address != IntPtr.Zero)
             {
                 var atk = (AtkUnitBase*)yesnoAddon.Address;
-                if (atk->IsVisible)
-                {
-                    atk->Hide(true, false, 0);
-                    Plugin.Log.Debug("已关闭 SelectYesno");
-                }
+                atk->FireCallback(1, null, true);
+                Plugin.Log.Debug("已关闭 SelectYesno (callback 1)");
             }
         }
 
