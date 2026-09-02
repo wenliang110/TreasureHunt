@@ -147,7 +147,10 @@ public class MapDecipherService : IDisposable
                 return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
             }
 
-            // 等待解读对话框（如果有多个藏宝图会弹出选择窗口）
+            // 等待游戏响应（游戏需要时间弹出解读对话框）
+            await Task.Delay(500, token);
+
+            // 等待解读对话框并自动确认（选择地图 → 确认解读）
             await HandleDecipherDialog(token);
 
             // 等待旗帜标记出现（解读后游戏会在 AgentMap 上放置一个 flag marker）
@@ -290,12 +293,41 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 处理解读后的对话框序列
-    /// 使用统一的 ProcessDialogSequence 处理所有对话框类型
     /// 完整流程: SelectIconString(选择地图) → SelectYesno(确认解读)
+    /// 关键修复：ExecuteDecipher 后游戏需要一点时间弹出对话框，必须先等待对话框出现
+    /// 之前 ProcessDialogSequence 第一次检查没发现对话框就立即退出，导致对话框无人处理
     /// </summary>
     private async Task HandleDecipherDialog(CancellationToken token)
     {
-        OnLog?.Invoke("等待解读对话框...");
+        OnLog?.Invoke("等待解读对话框出现...");
+
+        // 先等待对话框出现（游戏需要 200-500ms 来显示对话框）
+        var waitStart = DateTime.Now;
+        var dialogFound = false;
+        while ((DateTime.Now - waitStart).TotalMilliseconds < 8000)
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (GameHelper.IsSelectYesnoOpen() ||
+                GameHelper.IsSelectIconStringOpen() ||
+                GameHelper.IsSelectStringOpen() ||
+                GameHelper.IsTalkOpen())
+            {
+                dialogFound = true;
+                OnLog?.Invoke("检测到解读对话框");
+                break;
+            }
+
+            await Task.Delay(200, token);
+        }
+
+        if (!dialogFound)
+        {
+            OnLog?.Invoke("未检测到解读对话框（可能已直接解读或无对话框）");
+            return;
+        }
+
+        // 处理对话框序列：选择地图 → 确认解读
         await GameObjectHelper.ProcessDialogSequence(token,
             selectStringIndex: 0,
             selectIconStringIndex: 0,
