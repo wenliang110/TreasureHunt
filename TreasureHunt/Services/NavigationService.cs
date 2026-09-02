@@ -27,6 +27,7 @@ public class NavigationService : IDisposable
 {
     private readonly Plugin _plugin;
     private CancellationTokenSource? _cts;
+    private readonly AdvancedUnstuck _unstuck = new();
 
     public event Action<NavigationState>? StateChanged;
     public event Action<string>? OnLog;
@@ -46,6 +47,7 @@ public class NavigationService : IDisposable
     public NavigationService(Plugin plugin)
     {
         _plugin = plugin;
+        _unstuck.OnLog += msg => OnLog?.Invoke(msg);
     }
 
     /// <summary>
@@ -114,7 +116,7 @@ public class NavigationService : IDisposable
         }
         catch (OperationCanceledException)
         {
-            VnavmeshHelper.StopAutoRunning();
+            VnavmeshHelper.Stop();
             return new NavigationResult { Success = false, ErrorMessage = "已取消" };
         }
         catch (Exception ex)
@@ -258,42 +260,25 @@ public class NavigationService : IDisposable
 
     /// <summary>
     /// 等待区域加载完成
+    /// 参考 Untarnished Heart: WaitForAreaReadyAsync 和 GatherBuddy: 传送等待模式
     /// </summary>
     private async Task WaitForAreaLoad(CancellationToken token)
     {
         OnLog?.Invoke("等待区域加载...");
-        var timeout = TimeSpan.FromSeconds(45);
-        var startTime = DateTime.Now;
 
-        // 等待传送开始（最多等3秒）
-        var teleportStarted = false;
-        while (!AetheryteHelper.IsTeleporting() && (DateTime.Now - startTime) < TimeSpan.FromSeconds(3))
+        // 使用通用助手等待传送完成
+        var success = await AsyncHelper.WaitForTeleportCompleteAsync(token, 45000);
+        if (!success)
         {
-            await Task.Delay(100, token);
-            teleportStarted = true;
-        }
-
-        if (!teleportStarted)
-        {
-            OnLog?.Invoke("传送未开始，可能已在目标区域");
+            // 传送可能已经在目标区域，检查玩家是否已加载
+            if (Plugin.ObjectTable.LocalPlayer != null)
+            {
+                OnLog?.Invoke("已在目标区域");
+                return;
+            }
+            OnLog?.Invoke("等待区域加载超时");
             return;
         }
-
-        // 等待传送完成
-        while (AetheryteHelper.IsTeleporting() && (DateTime.Now - startTime) < timeout)
-        {
-            await Task.Delay(200, token);
-        }
-
-        // 等待角色完全加载
-        var playerWaitStart = DateTime.Now;
-        while (Plugin.ObjectTable.LocalPlayer == null && (DateTime.Now - playerWaitStart) < TimeSpan.FromSeconds(10))
-        {
-            await Task.Delay(200, token);
-        }
-
-        // 额外等待一下，确保游戏完全就绪
-        await Task.Delay(500, token);
 
         OnLog?.Invoke("区域加载完成");
     }
@@ -318,13 +303,14 @@ public class NavigationService : IDisposable
             return false;
         }
 
-        // 等待导航完成
+        // 等待导航完成（参考 GatherBuddy: 超时5分钟 + 卡住检测）
         var timeout = TimeSpan.FromMinutes(5);
         var startTime = DateTime.Now;
         var lastMoveTime = DateTime.Now;
         var lastPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var retryCount = 0;
         const int maxRetries = 3;
+        _unstuck.Reset();
 
         while ((DateTime.Now - startTime) < timeout)
         {
@@ -338,14 +324,19 @@ public class NavigationService : IDisposable
             }
 
             // 检查是否到达目的地
-            if (VnavmeshHelper.IsAtDestination(destination, _plugin.Configuration.NavigationStopDistance))
+            var distToDest = Vector3.Distance(player.Position, destination);
+            if (distToDest <= _plugin.Configuration.NavigationStopDistance)
             {
-                VnavmeshHelper.StopAutoRunning();
+                VnavmeshHelper.Stop();
                 OnLog?.Invoke("已到达目的地");
                 return true;
             }
 
-            // 检查移动状态（防卡死检测）
+            // 卡住检测（参考 GatherBuddy AdvancedUnstuck）
+            var isPathing = VnavmeshHelper.IsPlayerMoving();
+            _unstuck.Check(isPathing);
+
+            // 额外的重寻路逻辑（GatherBuddy 无此逻辑，但对我们有用）
             var currentPos = player.Position;
             var moved = Vector3.Distance(currentPos, lastPos);
 
@@ -354,14 +345,14 @@ public class NavigationService : IDisposable
                 lastMoveTime = DateTime.Now;
                 lastPos = currentPos;
             }
-            else if ((DateTime.Now - lastMoveTime).TotalSeconds > 5)
+            else if ((DateTime.Now - lastMoveTime).TotalSeconds > 8)
             {
-                // 5秒没动了
+                // 8秒没动了（AdvancedUnstuck 已经尝试过跳跃+随机移动了，还没脱困就重寻路）
                 if (retryCount < maxRetries)
                 {
                     retryCount++;
-                    OnLog?.Invoke($"移动停滞，重新寻路 (重试 {retryCount}/{maxRetries})...");
-                    VnavmeshHelper.StopAutoRunning();
+                    OnLog?.Invoke($"移动停滞 {retryCount}/{maxRetries}，重新寻路...");
+                    VnavmeshHelper.Stop();
                     await Task.Delay(800, token);
 
                     var retrySuccess = VnavmeshHelper.PathfindAndMoveTo(destination);
@@ -370,6 +361,7 @@ public class NavigationService : IDisposable
                         OnLog?.Invoke("重新寻路失败");
                     }
                     lastMoveTime = DateTime.Now;
+                    _unstuck.Reset();
                 }
                 else
                 {
@@ -379,15 +371,15 @@ public class NavigationService : IDisposable
             }
 
             // 检查 vnavmesh 是否还在运行
-            if (!VnavmeshHelper.IsAutoRunning() && !VnavmeshHelper.IsPathRunning())
+            if (!VnavmeshHelper.IsPlayerMoving())
             {
-                // 如果 vnavmesh 已停止但还没到目的地，尝试重新发起
                 var elapsedSinceLastMove = (DateTime.Now - lastMoveTime).TotalSeconds;
                 if (elapsedSinceLastMove > 2)
                 {
                     OnLog?.Invoke("vnavmesh 已停止，重新发起...");
                     VnavmeshHelper.PathfindAndMoveTo(destination);
                     lastMoveTime = DateTime.Now;
+                    _unstuck.Reset();
                 }
             }
 
@@ -395,7 +387,7 @@ public class NavigationService : IDisposable
         }
 
         OnLog?.Invoke("导航超时");
-        VnavmeshHelper.StopAutoRunning();
+        VnavmeshHelper.Stop();
         return false;
     }
 
@@ -429,12 +421,13 @@ public class NavigationService : IDisposable
 
     public void Cancel()
     {
-        VnavmeshHelper.StopAutoRunning();
+        VnavmeshHelper.Stop();
         _cts?.Cancel();
     }
 
     public void Dispose()
     {
         Cancel();
+        _unstuck.Dispose();
     }
 }

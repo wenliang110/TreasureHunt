@@ -162,14 +162,13 @@ public class PortalDungeonService : IDisposable
         if (!GameObjectHelper.IsInInteractRange(portal, 3.0f))
         {
             VnavmeshHelper.PathfindAndMoveTo(portal.Position);
-            var timeout = TimeSpan.FromSeconds(30);
-            var start = DateTime.Now;
-            while (!GameObjectHelper.IsInInteractRange(portal, 3.0f) && (DateTime.Now - start) < timeout)
-            {
-                token.ThrowIfCancellationRequested();
-                await Task.Delay(200, token);
-            }
-            VnavmeshHelper.StopAutoRunning();
+            await AsyncHelper.WaitUntilAsync(
+                () => GameObjectHelper.IsInInteractRange(portal, 3.0f),
+                "到达传送门位置",
+                token,
+                30000,
+                200);
+            VnavmeshHelper.Stop();
         }
 
         GameObjectHelper.InteractWithObject(portal);
@@ -181,31 +180,43 @@ public class PortalDungeonService : IDisposable
 
     private async Task WaitForDungeonCombat(CancellationToken token)
     {
-        var timeout = TimeSpan.FromMinutes(5);
-        var startTime = DateTime.Now;
-        var inCombat = false;
+        OnLog?.Invoke("等待洞内战斗...");
 
-        while ((DateTime.Now - startTime) < timeout)
+        // 等待进入战斗
+        var combatStarted = await AsyncHelper.WaitUntilAsync(
+            () => Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            "洞内战斗开始",
+            token,
+            30000,
+            500);
+
+        if (combatStarted)
         {
-            token.ThrowIfCancellationRequested();
-
-            var inCombatNow = Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
-            if (inCombatNow && !inCombat)
-            {
-                inCombat = true;
-                OnLog?.Invoke("战斗开始");
-            }
-            else if (!inCombatNow && inCombat)
-            {
-                OnLog?.Invoke("战斗结束");
-                await Task.Delay(_plugin.Configuration.CombatWaitDelay, token);
-                return;
-            }
-
-            await Task.Delay(500, token);
+            OnLog?.Invoke("战斗开始");
+        }
+        else
+        {
+            OnLog?.Invoke("未检测到战斗，可能已秒杀");
+            return;
         }
 
-        OnLog?.Invoke("等待战斗超时");
+        // 等待战斗结束
+        var combatEnded = await AsyncHelper.WaitUntilAsync(
+            () => !Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            "洞内战斗结束",
+            token,
+            300000,
+            500);
+
+        if (combatEnded)
+        {
+            OnLog?.Invoke("战斗结束");
+            await Task.Delay(_plugin.Configuration.CombatWaitDelay, token);
+        }
+        else
+        {
+            OnLog?.Invoke("等待战斗超时");
+        }
     }
 
     private async Task OpenDungeonChest(CancellationToken token)
@@ -226,14 +237,13 @@ public class PortalDungeonService : IDisposable
         if (!GameObjectHelper.IsInInteractRange(chest, 3.0f))
         {
             VnavmeshHelper.PathfindAndMoveTo(chest.Position);
-            var timeout = TimeSpan.FromSeconds(15);
-            var start = DateTime.Now;
-            while (!GameObjectHelper.IsInInteractRange(chest, 3.0f) && (DateTime.Now - start) < timeout)
-            {
-                token.ThrowIfCancellationRequested();
-                await Task.Delay(200, token);
-            }
-            VnavmeshHelper.StopAutoRunning();
+            await AsyncHelper.WaitUntilAsync(
+                () => GameObjectHelper.IsInInteractRange(chest, 3.0f),
+                "到达洞内宝箱位置",
+                token,
+                15000,
+                200);
+            VnavmeshHelper.Stop();
         }
 
         GameObjectHelper.InteractWithObject(chest);
@@ -308,14 +318,13 @@ public class PortalDungeonService : IDisposable
         if (!GameObjectHelper.IsInInteractRange(nextFloor, 3.0f))
         {
             VnavmeshHelper.PathfindAndMoveTo(nextFloor.Position);
-            var timeout = TimeSpan.FromSeconds(15);
-            var start = DateTime.Now;
-            while (!GameObjectHelper.IsInInteractRange(nextFloor, 3.0f) && (DateTime.Now - start) < timeout)
-            {
-                token.ThrowIfCancellationRequested();
-                await Task.Delay(200, token);
-            }
-            VnavmeshHelper.StopAutoRunning();
+            await AsyncHelper.WaitUntilAsync(
+                () => GameObjectHelper.IsInInteractRange(nextFloor, 3.0f),
+                "到达下一层入口",
+                token,
+                15000,
+                200);
+            VnavmeshHelper.Stop();
         }
 
         GameObjectHelper.InteractWithObject(nextFloor);

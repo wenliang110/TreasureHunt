@@ -7,12 +7,12 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.1.9.0 - 重大改进：参考Daily Routines反编译，使用InfoProxyItemSearch底层API直接购买(不再依赖addon callback)；搜索: SearchItemId+RequestData→等待Listings；购买: SetLastPurchasedItem+SendPurchaseRequestPacket；删除PDR功能；删除callback 9/5/2旧流程\nv0.1.8.4 - 删除PDR购买功能；简化搜索(去掉SetSearchTextSafe)\nv0.1.8.2 - 修复交易板打开检测(检查addon存在非IsVisible)\nv0.1.8.1 - G18宝箱8个预设位置；宝箱随机移动搜索；传送门随机移动搜索",
-    "AssemblyVersion": "0.1.9.0",
+    "Changelog": "v0.2.0.0 - 重大架构改进：参考 GatherBuddy Reborn 和 Untarnished Heart 开源插件模式\n1. 新增 AdvancedUnstuck 卡住检测系统(参考GatherBuddy)：跳跃+随机移动恢复，冷却期防止误判\n2. 新增 AsyncHelper 通用异步等待助手(参考Untarnished Heart)：WaitUntilAsync/WaitForAreaReadyAsync/WaitForTeleportCompleteAsync 统一异步等待模式\n3. 改进 NavigationService：集成卡住检测，5分钟超时+3次重寻路，使用 AsyncHelper 等待传送完成\n4. 改进 GameObjectHelper：宝箱检测使用 ObjectKind.Treasure 枚举(不受语言影响)，交互前先 SetTarget 提高可靠性\n5. 改进 TreasureCofferService：所有手动 while 循环替换为 AsyncHelper.WaitUntilAsync\n6. 改进 PortalDungeonService：洞内战斗/移动/交互统一使用 AsyncHelper 模式\n7. 迁移到 VnavmeshHelper 新 API(Stop/IsPlayerMoving)，移除废弃方法调用",
+    "AssemblyVersion": "0.2.0.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.9.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.1.9.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.0.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.0.0/TreasureHunt.zip",
     "DownloadCount": 0,
     "LastUpdate": "1788510000"
   }

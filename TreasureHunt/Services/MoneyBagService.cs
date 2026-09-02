@@ -142,19 +142,19 @@ public class MoneyBagService : IDisposable
         catch (OperationCanceledException)
         {
             OnLog?.Invoke("钱袋子收集已取消");
-            VnavmeshHelper.StopAutoRunning();
+            VnavmeshHelper.Stop();
             return new MoneyBagResult { Success = false, ErrorMessage = "已取消", BagsCollected = _bagsCollected, TargetCount = TargetBagCount };
         }
         catch (Exception ex)
         {
             OnLog?.Invoke($"钱袋子收集异常: {ex.Message}");
-            VnavmeshHelper.StopAutoRunning();
+            VnavmeshHelper.Stop();
             return new MoneyBagResult { Success = false, ErrorMessage = ex.Message, BagsCollected = _bagsCollected, TargetCount = TargetBagCount };
         }
         finally
         {
             _isActive = false;
-            VnavmeshHelper.StopAutoRunning();
+            VnavmeshHelper.Stop();
             _cts?.Dispose();
             _cts = null;
         }
@@ -261,7 +261,7 @@ public class MoneyBagService : IDisposable
             if (VnavmeshHelper.IsAvailable())
             {
                 // 检查是否已经在导航到这个目标
-                if (!VnavmeshHelper.IsAutoRunning() || _lastTargetPos != bag.Position)
+                if (!VnavmeshHelper.IsPlayerMoving() || _lastTargetPos != bag.Position)
                 {
                     VnavmeshHelper.PathfindAndMoveTo(bag.Position);
                 }
@@ -285,7 +285,7 @@ public class MoneyBagService : IDisposable
                     if (currentDist <= BagInteractRange + 1.0f)
                     {
                         // 到达了，收集
-                        VnavmeshHelper.StopAutoRunning();
+                        VnavmeshHelper.Stop();
                         TryCollectBag(bag);
                         return;
                     }
@@ -294,7 +294,7 @@ public class MoneyBagService : IDisposable
                 }
 
                 // 超时还没到，尝试交互（可能很近了）
-                VnavmeshHelper.StopAutoRunning();
+                VnavmeshHelper.Stop();
                 TryCollectBag(bag);
             }
             else
@@ -365,7 +365,7 @@ public class MoneyBagService : IDisposable
     public void Cancel()
     {
         _cts?.Cancel();
-        VnavmeshHelper.StopAutoRunning();
+        VnavmeshHelper.Stop();
         _isActive = false;
     }
 

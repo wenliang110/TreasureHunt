@@ -159,21 +159,19 @@ public class TreasureCofferService : IDisposable
     private async Task<Dalamud.Game.ClientState.Objects.Types.IGameObject?> WaitForCofferSpawn(CancellationToken token)
     {
         OnLog?.Invoke("等待宝箱出现...");
-        var timeout = TimeSpan.FromSeconds(10);
-        var startTime = DateTime.Now;
 
-        while ((DateTime.Now - startTime) < timeout)
+        // 使用 AsyncHelper 等待宝箱出现（参考 Untarnished Heart 的 WaitUntilAsync 模式）
+        var found = await AsyncHelper.WaitUntilAsync(
+            () => GameObjectHelper.GetTreasureCoffer() != null,
+            "宝箱出现",
+            token,
+            10000,
+            200);
+
+        if (found)
         {
-            token.ThrowIfCancellationRequested();
-
-            var coffer = GameObjectHelper.GetTreasureCoffer();
-            if (coffer != null)
-            {
-                OnLog?.Invoke("宝箱已出现");
-                return coffer;
-            }
-
-            await Task.Delay(200, token);
+            OnLog?.Invoke("宝箱已出现");
+            return GameObjectHelper.GetTreasureCoffer();
         }
 
         // 10秒没找到，尝试随机移动搜索（参考 SND 脚本）
@@ -245,20 +243,19 @@ public class TreasureCofferService : IDisposable
             if (!GameObjectHelper.IsInInteractRange(coffer, 3.0f))
             {
                 OnLog?.Invoke("移动到宝箱附近");
-                // 使用 vnavmesh 导航到宝箱位置
                 VnavmeshHelper.PathfindAndMoveTo(coffer.Position);
 
-                var moveTimeout = TimeSpan.FromSeconds(30);
-                var moveStart = DateTime.Now;
-                while (!GameObjectHelper.IsInInteractRange(coffer, 3.0f) && (DateTime.Now - moveStart) < moveTimeout)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(200, token);
-                }
+                // 使用 AsyncHelper 等待到达交互范围
+                var reached = await AsyncHelper.WaitUntilAsync(
+                    () => GameObjectHelper.IsInInteractRange(coffer, 3.0f),
+                    "到达宝箱位置",
+                    token,
+                    30000,
+                    200);
 
-                VnavmeshHelper.StopAutoRunning();
+                VnavmeshHelper.Stop();
 
-                if (!GameObjectHelper.IsInInteractRange(coffer, 3.0f))
+                if (!reached)
                 {
                     OnLog?.Invoke("无法到达宝箱位置");
                     return false;
@@ -298,8 +295,13 @@ public class TreasureCofferService : IDisposable
                 {
                     OnLog?.Invoke($"距离宝箱较远，重新靠近...");
                     VnavmeshHelper.PathfindAndMoveTo(currentCoffer.Position);
-                    await Task.Delay(1000, token);
-                    VnavmeshHelper.StopAutoRunning();
+                    await AsyncHelper.WaitUntilAsync(
+                        () => GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f),
+                        "靠近宝箱",
+                        token,
+                        5000,
+                        200);
+                    VnavmeshHelper.Stop();
                 }
 
                 // 交互
@@ -328,43 +330,42 @@ public class TreasureCofferService : IDisposable
     private async Task WaitForCombatEnd(CancellationToken token)
     {
         OnLog?.Invoke("等待战斗结束...");
-        var timeout = TimeSpan.FromMinutes(5);
-        var startTime = DateTime.Now;
-        var inCombat = false;
 
-        while ((DateTime.Now - startTime) < timeout)
+        // 先等待进入战斗（参考 Untarnished Heart: 等待条件满足模式）
+        var combatStarted = await AsyncHelper.WaitUntilAsync(
+            () => Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            "战斗开始",
+            token,
+            30000,
+            500);
+
+        if (combatStarted)
         {
-            token.ThrowIfCancellationRequested();
-
-            var player = Plugin.ObjectTable.LocalPlayer;
-            if (player == null)
-            {
-                await Task.Delay(500, token);
-                continue;
-            }
-
-            // 检查战斗状态
-            var currentInCombat = Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
-            if (currentInCombat)
-            {
-                if (!inCombat)
-                {
-                    inCombat = true;
-                    OnLog?.Invoke("战斗开始");
-                }
-            }
-            else if (inCombat)
-            {
-                // 战斗刚结束
-                OnLog?.Invoke("战斗结束");
-                await Task.Delay(_plugin.Configuration.CombatWaitDelay, token);
-                return;
-            }
-
-            await Task.Delay(500, token);
+            OnLog?.Invoke("战斗开始");
+        }
+        else
+        {
+            OnLog?.Invoke("未检测到战斗开始，可能已秒杀或无怪物");
+            return;
         }
 
-        OnLog?.Invoke("等待战斗超时");
+        // 等待战斗结束（5分钟超时）
+        var combatEnded = await AsyncHelper.WaitUntilAsync(
+            () => !Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat],
+            "战斗结束",
+            token,
+            300000,
+            500);
+
+        if (combatEnded)
+        {
+            OnLog?.Invoke("战斗结束");
+            await Task.Delay(_plugin.Configuration.CombatWaitDelay, token);
+        }
+        else
+        {
+            OnLog?.Invoke("等待战斗超时");
+        }
     }
 
     private async Task<bool> OpenChestAfterCombat(Dalamud.Game.ClientState.Objects.Types.IGameObject coffer, CancellationToken token)
@@ -385,18 +386,17 @@ public class TreasureCofferService : IDisposable
                 }
             }
 
-            // 移动到宝箱附近
+            // 移动到宝箱附近（使用 AsyncHelper 等待到达交互范围）
             if (!GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f))
             {
                 VnavmeshHelper.PathfindAndMoveTo(currentCoffer.Position);
-                var moveTimeout = TimeSpan.FromSeconds(15);
-                var moveStart = DateTime.Now;
-                while (!GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f) && (DateTime.Now - moveStart) < moveTimeout)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(200, token);
-                }
-                VnavmeshHelper.StopAutoRunning();
+                await AsyncHelper.WaitUntilAsync(
+                    () => GameObjectHelper.IsInInteractRange(currentCoffer, 3.0f),
+                    "到达宝箱位置(战斗后)",
+                    token,
+                    15000,
+                    200);
+                VnavmeshHelper.Stop();
             }
 
             // 持续开箱直到宝箱消失（参考 SND 脚本 ContinuousOpenChest）
@@ -421,8 +421,13 @@ public class TreasureCofferService : IDisposable
                 if (!GameObjectHelper.IsInInteractRange(chest, 3.0f))
                 {
                     VnavmeshHelper.PathfindAndMoveTo(chest.Position);
-                    await Task.Delay(1000, token);
-                    VnavmeshHelper.StopAutoRunning();
+                    await AsyncHelper.WaitUntilAsync(
+                        () => GameObjectHelper.IsInInteractRange(chest, 3.0f),
+                        "靠近宝箱(开箱)",
+                        token,
+                        5000,
+                        200);
+                    VnavmeshHelper.Stop();
                 }
 
                 // 交互开箱
@@ -528,14 +533,13 @@ public class TreasureCofferService : IDisposable
         if (!GameObjectHelper.IsInInteractRange(obj, 3.0f))
         {
             VnavmeshHelper.PathfindAndMoveTo(obj.Position);
-            var timeout = TimeSpan.FromSeconds(30);
-            var start = DateTime.Now;
-            while (!GameObjectHelper.IsInInteractRange(obj, 3.0f) && (DateTime.Now - start) < timeout)
-            {
-                token.ThrowIfCancellationRequested();
-                await Task.Delay(200, token);
-            }
-            VnavmeshHelper.StopAutoRunning();
+            await AsyncHelper.WaitUntilAsync(
+                () => GameObjectHelper.IsInInteractRange(obj, 3.0f),
+                "到达交互对象位置",
+                token,
+                30000,
+                200);
+            VnavmeshHelper.Stop();
         }
 
         GameObjectHelper.InteractWithObject(obj);

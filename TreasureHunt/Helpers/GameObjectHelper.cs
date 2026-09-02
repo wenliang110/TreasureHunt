@@ -82,7 +82,9 @@ public static unsafe class GameObjectHelper
     {
         try
         {
-            var objIdx = obj.ObjectIndex;
+            // 参考 Untarnished Heart: 先设置目标再交互，提高交互可靠性
+            SetTarget(obj);
+
             var targetSystem = TargetSystem.Instance();
             if (targetSystem == null) return false;
 
@@ -117,8 +119,33 @@ public static unsafe class GameObjectHelper
 
     public static IGameObject? GetTreasureCoffer()
     {
-        // 宝箱的 DataId 通常以特定前缀开头
-        // 需要根据实际游戏版本调试确认
+        // 参考 Untarnished Heart: 使用 ObjectKind.Treasure 精确查找宝箱
+        // 比名字匹配更可靠（不受语言设置影响）
+        var player = Plugin.ObjectTable.LocalPlayer;
+        var pos = player?.Position ?? Vector3.Zero;
+        IGameObject? nearest = null;
+        var minDist = float.MaxValue;
+
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (obj == null) continue;
+
+            // 优先使用 ObjectKind.Treasure（最可靠）
+            if (obj.ObjectKind == Dalamud.Game.ClientState.Objects.Enums.ObjectKind.Treasure)
+            {
+                var dist = Vector3.Distance(pos, obj.Position);
+                if (dist < minDist)
+                {
+                    minDist = dist;
+                    nearest = obj;
+                }
+            }
+        }
+
+        if (nearest != null)
+            return nearest;
+
+        // 回退到名字匹配（兼容旧版本）
         return FindAllObjectsByDataId(0).FirstOrDefault(o =>
             o.Name.ToString().Contains("treasure", StringComparison.OrdinalIgnoreCase) ||
             o.Name.ToString().Contains("宝箱", StringComparison.OrdinalIgnoreCase) ||
