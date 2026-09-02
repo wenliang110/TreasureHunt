@@ -58,6 +58,7 @@ public static class AsyncHelper
 
     /// <summary>
     /// 等待区域加载完成
+    /// 参考 vsatisfy: GameMain.Instance()->TerritoryLoadState == 2（比 BetweenAreas 更精确）
     /// 参考 Untarnished Heart: WaitForAreaReadyAsync
     /// </summary>
     public static async Task<bool> WaitForAreaReadyAsync(CancellationToken token, int timeoutMs = 30000)
@@ -68,7 +69,8 @@ public static class AsyncHelper
                 var cond = Plugin.Condition;
                 return !cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] &&
                        !cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
-                       Plugin.ObjectTable.LocalPlayer != null;
+                       GameHelper.IsTerritoryLoaded() &&
+                       GameHelper.IsInteractable();
             },
             "等待区域加载",
             token,
@@ -79,12 +81,14 @@ public static class AsyncHelper
     /// <summary>
     /// 等待传送完成
     /// 参考 GatherBuddy: Enqueue(BetweenAreas) → Enqueue(!BetweenAreas) → Delay(1500)
+    /// 参考 vsatisfy: 使用 IsTerritoryLoaded + IsInteractable 精确检测
     /// </summary>
     public static async Task<bool> WaitForTeleportCompleteAsync(CancellationToken token, int timeoutMs = 30000)
     {
-        // 先等待进入传送状态
+        // 先等待进入传送状态（BetweenAreas 或 正在施放传送）
         var entered = await WaitUntilAsync(
-            () => Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas],
+            () => Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] ||
+                  GameHelper.IsCastingTeleport(),
             "等待传送开始",
             token,
             10000,
@@ -93,10 +97,11 @@ public static class AsyncHelper
         if (!entered)
             return false;
 
-        // 等待传送完成
+        // 等待传送完成：不在区域切换中 + 区域已加载 + 玩家可交互
         var exited = await WaitUntilAsync(
             () => !Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] &&
-                  Plugin.ObjectTable.LocalPlayer != null,
+                  GameHelper.IsTerritoryLoaded() &&
+                  GameHelper.IsInteractable(),
             "等待传送完成",
             token,
             timeoutMs,

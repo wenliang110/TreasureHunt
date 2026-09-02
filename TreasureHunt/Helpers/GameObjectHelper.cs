@@ -91,6 +91,14 @@ public static unsafe class GameObjectHelper
             targetSystem->InteractWithObject(
                 (GameObject*)obj.Address, false);
 
+            // 参考 vsatisfy: 交互后推进可能出现的 Talk 对话框
+            // 宝箱/传送门/洞内机关交互后可能有 NPC 对话需要推进
+            System.Threading.Thread.Sleep(200);
+            if (GameHelper.IsTalkOpen())
+            {
+                GameHelper.AdvanceTalkUntilClosed();
+            }
+
             return true;
         }
         catch (Exception ex)

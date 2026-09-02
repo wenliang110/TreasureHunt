@@ -306,12 +306,14 @@ public static unsafe class AetheryteHelper
 
     /// <summary>
     /// 检查是否正在传送中
+    /// 参考 vsatisfy: 同时检查 IsCastingTeleport 和 BetweenAreas
     /// </summary>
     public static bool IsTeleporting()
     {
         return Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] ||
                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas51] ||
-               Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedInCutSceneEvent];
+               Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedInCutSceneEvent] ||
+               GameHelper.IsCastingTeleport();
     }
 
     /// <summary>
