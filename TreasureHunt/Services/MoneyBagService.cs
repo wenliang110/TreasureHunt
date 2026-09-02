@@ -238,7 +238,7 @@ public class MoneyBagService : IDisposable
     }
 
     /// <summary>
-    /// 移动到袋子位置并收集
+    /// 移动到袋子位置并收集 - 使用 MoveToAsync 异步导航
     /// </summary>
     private async Task MoveToAndCollectBag(Dalamud.Game.ClientState.Objects.Types.IGameObject bag, CancellationToken token)
     {
@@ -257,44 +257,14 @@ public class MoneyBagService : IDisposable
                 return;
             }
 
-            // 使用 vnavmesh 导航到袋子位置
+            // 使用 vnavmesh 导航到袋子位置（使用短超时的异步导航）
             if (VnavmeshHelper.IsAvailable())
             {
-                // 检查是否已经在导航到这个目标
-                if (!VnavmeshHelper.IsPlayerMoving() || _lastTargetPos != bag.Position)
-                {
-                    VnavmeshHelper.PathfindAndMoveTo(bag.Position);
-                }
+                // 使用快速短超时导航（奖励房时间紧迫）
+                await VnavmeshHelper.MoveToAsync(bag.Position, tolerance: BagInteractRange,
+                    fly: false, timeoutMs: 2500, token: token);
 
-                // 等待到达或超时（快速移动模式，最多等2秒）
-                var waitStart = DateTime.Now;
-                var maxWait = TimeSpan.FromSeconds(2.5);
-
-                while ((DateTime.Now - waitStart) < maxWait)
-                {
-                    token.ThrowIfCancellationRequested();
-
-                    player = Plugin.ObjectTable.LocalPlayer;
-                    if (player == null)
-                    {
-                        await Task.Delay(50, token);
-                        continue;
-                    }
-
-                    var currentDist = Vector3.Distance(player.Position, bag.Position);
-                    if (currentDist <= BagInteractRange + 1.0f)
-                    {
-                        // 到达了，收集
-                        VnavmeshHelper.Stop();
-                        TryCollectBag(bag);
-                        return;
-                    }
-
-                    await Task.Delay(50, token);
-                }
-
-                // 超时还没到，尝试交互（可能很近了）
-                VnavmeshHelper.Stop();
+                // 导航结束后尝试交互（无论是否完全到达）
                 TryCollectBag(bag);
             }
             else
@@ -305,6 +275,10 @@ public class MoneyBagService : IDisposable
 
             await Task.Delay(_plugin.Configuration.MoneyBagScanInterval, token);
         }
+        catch (OperationCanceledException)
+        {
+            VnavmeshHelper.Stop();
+        }
         catch (Exception ex)
         {
             OnLog?.Invoke($"移动收集袋子异常: {ex.Message}");
@@ -312,7 +286,7 @@ public class MoneyBagService : IDisposable
     }
 
     /// <summary>
-    /// 尝试收集袋子
+    /// 尝试收集袋子 - 使用同步交互（奖励房时间紧迫，不需要等待对话框）
     /// </summary>
     private void TryCollectBag(Dalamud.Game.ClientState.Objects.Types.IGameObject bag)
     {
@@ -332,6 +306,9 @@ public class MoneyBagService : IDisposable
                 OnLog?.Invoke($"收集袋子 ({_bagsCollected}/{TargetBagCount})" + (count > 1 ? " [金色x3]" : ""));
                 OnBagCollected?.Invoke(_bagsCollected, TargetBagCount);
                 OnBagCountChanged?.Invoke(_bagsCollected);
+
+                // 收集后关闭可能弹出的对话框
+                GameHelper.CloseAllDialogs();
             }
         }
         catch (Exception ex)

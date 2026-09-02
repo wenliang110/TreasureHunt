@@ -284,7 +284,7 @@ public class NavigationService : IDisposable
     }
 
     /// <summary>
-    /// 使用 vnavmesh 导航到目标位置
+    /// 使用 vnavmesh 导航到目标位置 - 使用异步 MoveToAsync 避免死锁
     /// </summary>
     private async Task<bool> NavigateWithVnavmesh(Vector3 destination, CancellationToken token)
     {
@@ -296,22 +296,14 @@ public class NavigationService : IDisposable
 
         OnLog?.Invoke($"开始导航到 ({destination.X:F1}, {destination.Y:F1}, {destination.Z:F1})");
 
-        var success = VnavmeshHelper.PathfindAndMoveTo(destination);
-        if (!success)
-        {
-            OnLog?.Invoke("vnavmesh 寻路请求失败");
-            return false;
-        }
-
-        // 等待导航完成（参考 GatherBuddy: 超时5分钟 + 卡住检测）
+        var stopDistance = _plugin.Configuration.NavigationStopDistance;
         var timeout = TimeSpan.FromMinutes(5);
         var startTime = DateTime.Now;
-        var lastMoveTime = DateTime.Now;
-        var lastPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var retryCount = 0;
         const int maxRetries = 3;
         _unstuck.Reset();
 
+        // 使用 MoveToAsync 进行异步导航
         while ((DateTime.Now - startTime) < timeout)
         {
             token.ThrowIfCancellationRequested();
@@ -325,61 +317,43 @@ public class NavigationService : IDisposable
 
             // 检查是否到达目的地
             var distToDest = Vector3.Distance(player.Position, destination);
-            if (distToDest <= _plugin.Configuration.NavigationStopDistance)
+            if (distToDest <= stopDistance)
             {
                 VnavmeshHelper.Stop();
                 OnLog?.Invoke("已到达目的地");
                 return true;
             }
 
-            // 卡住检测（参考 GatherBuddy AdvancedUnstuck）
+            // 发起异步导航
+            var navSuccess = await VnavmeshHelper.MoveToAsync(
+                destination, tolerance: stopDistance, fly: false,
+                timeoutMs: 10000, token: token);
+
+            if (navSuccess)
+            {
+                VnavmeshHelper.Stop();
+                OnLog?.Invoke("已到达目的地");
+                return true;
+            }
+
+            // 导航未到达，检查卡住并重试
             var isPathing = VnavmeshHelper.IsPlayerMoving();
             _unstuck.Check(isPathing);
 
-            // 额外的重寻路逻辑（GatherBuddy 无此逻辑，但对我们有用）
-            var currentPos = player.Position;
-            var moved = Vector3.Distance(currentPos, lastPos);
-
-            if (moved > 0.3f)
+            // 如果 vnavmesh 已停止且未到达，重新寻路
+            if (!VnavmeshHelper.IsPlayerMoving())
             {
-                lastMoveTime = DateTime.Now;
-                lastPos = currentPos;
-            }
-            else if ((DateTime.Now - lastMoveTime).TotalSeconds > 8)
-            {
-                // 8秒没动了（AdvancedUnstuck 已经尝试过跳跃+随机移动了，还没脱困就重寻路）
                 if (retryCount < maxRetries)
                 {
                     retryCount++;
-                    OnLog?.Invoke($"移动停滞 {retryCount}/{maxRetries}，重新寻路...");
-                    VnavmeshHelper.Stop();
+                    OnLog?.Invoke($"导航中断 {retryCount}/{maxRetries}，重新寻路...");
                     await Task.Delay(800, token);
-
-                    var retrySuccess = VnavmeshHelper.PathfindAndMoveTo(destination);
-                    if (!retrySuccess)
-                    {
-                        OnLog?.Invoke("重新寻路失败");
-                    }
-                    lastMoveTime = DateTime.Now;
                     _unstuck.Reset();
                 }
                 else
                 {
-                    OnLog?.Invoke("多次重试后仍无法移动，导航失败");
+                    OnLog?.Invoke("多次重试后仍无法到达，导航失败");
                     break;
-                }
-            }
-
-            // 检查 vnavmesh 是否还在运行
-            if (!VnavmeshHelper.IsPlayerMoving())
-            {
-                var elapsedSinceLastMove = (DateTime.Now - lastMoveTime).TotalSeconds;
-                if (elapsedSinceLastMove > 2)
-                {
-                    OnLog?.Invoke("vnavmesh 已停止，重新发起...");
-                    VnavmeshHelper.PathfindAndMoveTo(destination);
-                    lastMoveTime = DateTime.Now;
-                    _unstuck.Reset();
                 }
             }
 

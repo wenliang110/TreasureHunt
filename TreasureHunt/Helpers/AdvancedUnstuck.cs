@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
@@ -131,10 +132,10 @@ public class AdvancedUnstuck : IDisposable
 
         OnLog?.Invoke($"随机移动到 ({targetPos.X:F1}, {targetPos.Z:F1})...");
 
-        // 通过 vnavmesh 尝试移动到随机位置
+        // 通过 vnavmesh 尝试移动到随机位置（fire-and-forget，避免 sync-over-async）
         if (VnavmeshHelper.IsAvailable())
         {
-            VnavmeshHelper.PathfindAndMoveTo(targetPos);
+            _ = Task.Run(() => VnavmeshHelper.MoveToAsync(targetPos, tolerance: 2.0f, fly: false, timeoutMs: 5000));
         }
     }
 

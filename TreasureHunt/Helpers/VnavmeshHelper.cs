@@ -190,7 +190,7 @@ public static class VnavmeshHelper
 
                         // 重新发起寻路
                         SetTolerance(tolerance);
-                        pathfindSub.InvokeFunc(destination, fly);
+                        await pathfindSub.InvokeFunc(destination, fly);
                     }
                     lastStuckCheck = DateTime.Now;
                     lastPosition = player.Position;
@@ -201,7 +201,8 @@ public static class VnavmeshHelper
 
             // 超时
             Stop();
-            Plugin.Log.Warning($"寻路超时（{timeoutMs}ms），距离目标还有 {Vector3.Distance(player.Position, destination):F1}m");
+            var finalDist = player != null ? Vector3.Distance(player.Position, destination) : -1;
+            Plugin.Log.Warning($"寻路超时（{timeoutMs}ms），距离目标还有 {finalDist:F1}m");
             return false;
         }
         catch (OperationCanceledException)

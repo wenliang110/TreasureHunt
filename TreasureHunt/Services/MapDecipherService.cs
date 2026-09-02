@@ -215,7 +215,7 @@ public class MapDecipherService : IDisposable
     private async Task<bool> WaitForFlagMarker(CancellationToken token)
     {
         OnLog?.Invoke("等待地图标记出现...");
-        var timeout = TimeSpan.FromSeconds(8);
+        var timeout = TimeSpan.FromSeconds(15);
         var startTime = DateTime.Now;
 
         while ((DateTime.Now - startTime) < timeout)
@@ -308,72 +308,18 @@ public class MapDecipherService : IDisposable
     }
 
     /// <summary>
-    /// 处理解读后弹出的选择窗口
-    /// 使用解读技能后，游戏弹出 SelectString/SelectIconString 让玩家选择要解读的地图
-    /// 参考 ECommons AddonMaster.SelectString: Callback.Fire(addon, true, index)
-    /// 参考 SND 脚本: /callback SelectString true 0
-    /// 参考 MapPurchaseService.ConfirmPurchaseDialog 的 FireCallback 模式
+    /// 处理解读后的对话框序列
+    /// 使用统一的 ProcessDialogSequence 处理所有对话框类型
+    /// 完整流程: SelectIconString(选择地图) → SelectYesno(确认解读)
     /// </summary>
     private async Task HandleDecipherDialog(CancellationToken token)
     {
-        var waitStart = DateTime.Now;
-        bool dialogFound = false;
-
-        while ((DateTime.Now - waitStart).TotalSeconds < 5)
-        {
-            token.ThrowIfCancellationRequested();
-
-            if (SelectDialogOption("SelectString", 0))
-            {
-                dialogFound = true;
-                break;
-            }
-
-            if (SelectDialogOption("SelectIconString", 0))
-            {
-                dialogFound = true;
-                break;
-            }
-
-            await Task.Delay(200, token);
-        }
-
-        if (dialogFound)
-        {
-            await Task.Delay(500, token);
-        }
-        else
-        {
-            OnLog?.Invoke("未出现解读选择窗口，可能已直接解读");
-        }
-    }
-
-    /// <summary>
-    /// 在选择窗口中选择指定选项
-    /// callback ID = 选项索引 (0 = 第一项)
-    /// </summary>
-    private unsafe bool SelectDialogOption(string addonName, int optionIndex)
-    {
-        var addon = Plugin.GameGui.GetAddonByName(addonName);
-        if (addon.Address == IntPtr.Zero) return false;
-
-        try
-        {
-            var atk = (AtkUnitBase*)addon.Address;
-            // 参考 MapPurchaseService 的 SelectYesno 处理模式
-            // callback ID = 选项索引, AtkValue 携带选项索引
-            var atkValues = stackalloc AtkValue[1];
-            atkValues[0].Type = AtkValueType.Int;
-            atkValues[0].Int = optionIndex;
-            atk->FireCallback((uint)optionIndex, atkValues, true);
-            OnLog?.Invoke($"已在 {addonName} 中选择第 {optionIndex + 1} 项");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            OnLog?.Invoke($"选择窗口选项失败: {ex.Message}");
-            return false;
-        }
+        OnLog?.Invoke("等待解读对话框...");
+        await GameObjectHelper.ProcessDialogSequence(token,
+            selectStringIndex: 0,
+            selectIconStringIndex: 0,
+            autoConfirmYesno: true,
+            totalTimeoutMs: 15000);
     }
 
     public unsafe bool ExecuteDig()
@@ -413,13 +359,19 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 关闭可能阻挡解读/挖掘的 UI 窗口
-    /// 参考 MapPurchaseService.CloseAllMarketWindows
     /// </summary>
     private unsafe void CloseBlockingWindows()
     {
         try
         {
-            var addonNames = new[] { "ItemSearch", "ItemSearchResult", "SelectYesno" };
+            var addonNames = new[] {
+                "ItemSearch", "ItemSearchResult",
+                "SelectYesno", "SelectString", "SelectIconString",
+                "Talk", "ContextMenu",
+                "NeedGreed", "Loot",
+                "Inventory", "InventoryExpansion",
+                "Shop", "ShopDigit"
+            };
             foreach (var name in addonNames)
             {
                 var addon = Plugin.GameGui.GetAddonByName(name);

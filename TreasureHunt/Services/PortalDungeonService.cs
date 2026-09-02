@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using TreasureHunt.Helpers;
@@ -24,14 +25,11 @@ public class PortalDungeonService : IDisposable
     public event Action<PortalDungeonPhase>? StateChanged;
     public event Action<string>? OnLog;
 
-    // 洞内关键对象 DataId
-    // 需要根据实际游戏版本调试确认
-    private const uint DungeonObjectDataId = 0; // 洞内交互对象
-    private const uint NextFloorButtonDataId = 0; // 下一层按钮
-    private const uint TreasureChestDataId = 0; // 洞内宝箱
-
     private const int MaxFloors = 6;
     private const int RollWaitTimeoutSec = 60;
+
+    // 进入洞前的领土 ID（用于检测是否被踢出）
+    private uint _preDungeonTerritoryId = 0;
 
     public PortalDungeonService(Plugin plugin)
     {
@@ -41,6 +39,7 @@ public class PortalDungeonService : IDisposable
 
     /// <summary>
     /// 完整的洞内流程
+    /// 流程: 进入传送门 → 等待加载 → 每层循环(找机关→交互→等战斗→开箱→roll点→检查奖励房→下一层) → 结束
     /// </summary>
     public async Task<PortalDungeonResult> ExecutePortalDungeonFlow()
     {
@@ -53,67 +52,100 @@ public class PortalDungeonService : IDisposable
             var reachedBonusRoom = false;
             var wasKickedOut = false;
 
+            // 记录进入洞前的领土 ID
+            _preDungeonTerritoryId = Plugin.ClientState.TerritoryType;
+
             // 步骤1: 进入传送门
             _state.SetPhase(PortalDungeonPhase.EnteringPortal);
             if (!await EnterPortal(token))
                 return new PortalDungeonResult { Success = false, ErrorMessage = "进入传送门失败" };
 
-            // 步骤2: 洞内循环
+            // 步骤2: 等待洞内区域加载完成
+            _state.SetPhase(PortalDungeonPhase.InDungeon);
+            OnLog?.Invoke("等待洞内区域加载...");
+            var areaLoaded = await AsyncHelper.WaitForAreaChangeAsync(_preDungeonTerritoryId, token, 30000);
+            if (!areaLoaded)
+            {
+                // 可能已经在洞内了（传送门直接传送）
+                OnLog?.Invoke("区域加载等待超时，检查是否已在洞内...");
+                if (!GameHelper.IsTerritoryLoaded() || !GameHelper.IsInteractable())
+                {
+                    return new PortalDungeonResult { Success = false, ErrorMessage = "洞内区域加载失败" };
+                }
+            }
+            await Task.Delay(2000, token); // 额外等待 2 秒让场景稳定
+
+            OnLog?.Invoke($"已进入洞内 (领土: {Plugin.ClientState.TerritoryType})");
+
+            // 步骤3: 洞内循环
             for (int floor = 1; floor <= MaxFloors; floor++)
             {
                 _state.CurrentFloor = floor;
                 token.ThrowIfCancellationRequested();
 
-                // 2a: 交互洞内机关
-                _state.SetPhase(PortalDungeonPhase.InteractingWithObject);
-                OnLog?.Invoke($"第 {floor} 层: 交互机关");
-                if (!await _plugin.TreasureCofferService.InteractWithDungeonObject(DungeonObjectDataId, token))
+                // 检查是否被踢出（领土变回洞外）
+                if (IsKickedOut())
                 {
-                    // 可能是被踢出了
                     _state.SetPhase(PortalDungeonPhase.ExitingDungeon);
                     wasKickedOut = true;
-                    OnLog?.Invoke($"第 {floor} 层: 被踢出");
+                    OnLog?.Invoke($"第 {floor} 层: 检测到被踢出");
                     break;
                 }
 
-                // 2b: 等待战斗
+                // 3a: 查找并交互洞内机关
+                _state.SetPhase(PortalDungeonPhase.InteractingWithObject);
+                OnLog?.Invoke($"第 {floor} 层: 查找机关...");
+                if (!await InteractWithDungeonObject(token))
+                {
+                    _state.SetPhase(PortalDungeonPhase.ExitingDungeon);
+                    wasKickedOut = true;
+                    OnLog?.Invoke($"第 {floor} 层: 未找到机关，可能被踢出");
+                    break;
+                }
+
+                // 3b: 等待战斗
                 _state.SetPhase(PortalDungeonPhase.WaitingForCombat);
                 OnLog?.Invoke($"第 {floor} 层: 等待战斗");
                 await WaitForDungeonCombat(token);
 
-                // 2c: 开箱
+                // 3c: 开箱
                 _state.SetPhase(PortalDungeonPhase.OpeningChest);
                 OnLog?.Invoke($"第 {floor} 层: 开箱");
                 await OpenDungeonChest(token);
 
-                // 2d: 等待 roll 点
+                // 3d: 等待 roll 点
                 _state.SetPhase(PortalDungeonPhase.WaitingForRoll);
                 OnLog?.Invoke($"第 {floor} 层: 等待 roll 点");
                 await WaitForRollComplete(token);
 
                 floorsCleared++;
 
-                // 2e: 检查是否进入奖励房（特殊梦境 - 宝箱图案3连）
+                // 3e: 检查是否进入奖励房（特殊梦境 - 宝箱图案3连）
                 if (await IsBonusRoomTriggered(token))
                 {
                     OnLog?.Invoke("检测到奖励房触发！");
                     reachedBonusRoom = true;
                     _state.SetPhase(PortalDungeonPhase.InBonusRoom);
-
-                    // 交给 MoneyBagService 处理
-                    // MoneyBagService 会在外部被调用
                     break;
                 }
 
-                // 2f: 交互进入下一层
+                // 3f: 检查是否被踢出
+                if (IsKickedOut())
+                {
+                    _state.SetPhase(PortalDungeonPhase.ExitingDungeon);
+                    wasKickedOut = true;
+                    OnLog?.Invoke($"第 {floor} 层: 开箱后被踢出");
+                    break;
+                }
+
+                // 3g: 交互进入下一层
                 _state.SetPhase(PortalDungeonPhase.MovingToNextFloor);
                 OnLog?.Invoke($"第 {floor} 层: 进入下一层");
                 if (!await MoveToNextFloor(token))
                 {
-                    // 可能是被踢出了
                     _state.SetPhase(PortalDungeonPhase.ExitingDungeon);
                     wasKickedOut = true;
-                    OnLog?.Invoke($"第 {floor} 层: 被踢出");
+                    OnLog?.Invoke($"第 {floor} 层: 无法进入下一层，可能被踢出");
                     break;
                 }
             }
@@ -146,9 +178,12 @@ public class PortalDungeonService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 进入传送门
+    /// 流程: 移动到传送门 → 交互 → 等待确认对话框 → 确认进入
+    /// </summary>
     private async Task<bool> EnterPortal(CancellationToken token)
     {
-        // 查找传送门（転送魔紋）
         var portal = GameObjectHelper.GetPortalTransferCircle();
         if (portal == null)
         {
@@ -156,26 +191,101 @@ public class PortalDungeonService : IDisposable
             return false;
         }
 
-        OnLog?.Invoke("进入传送门");
+        OnLog?.Invoke($"找到传送门: {portal.Name} at ({portal.Position.X:F1}, {portal.Position.Z:F1})");
 
-        // 移动到传送门并交互
+        // 移动到传送门附近
         if (!GameObjectHelper.IsInInteractRange(portal, 3.0f))
         {
-            VnavmeshHelper.PathfindAndMoveTo(portal.Position);
-            await AsyncHelper.WaitUntilAsync(
-                () => GameObjectHelper.IsInInteractRange(portal, 3.0f),
-                "到达传送门位置",
-                token,
-                30000,
-                200);
-            VnavmeshHelper.Stop();
+            OnLog?.Invoke("移动到传送门...");
+            if (VnavmeshHelper.IsAvailable())
+            {
+                var reached = await VnavmeshHelper.MoveToAsync(portal.Position, tolerance: 2.5f, fly: false, timeoutMs: 15000, token: token);
+                if (!reached)
+                {
+                    OnLog?.Invoke("无法到达传送门位置");
+                    return false;
+                }
+            }
+            else
+            {
+                OnLog?.Invoke("vnavmesh 不可用，无法移动到传送门");
+                return false;
+            }
         }
 
-        GameObjectHelper.InteractWithObject(portal);
-        await Task.Delay(2000, token); // 等待进入洞
+        // 交互传送门并处理后续对话框（可能有 SelectYesno 确认进入）
+        OnLog?.Invoke("交互传送门...");
+        var interacted = await GameObjectHelper.InteractWithObjectAsync(portal, token,
+            selectStringIndex: 0, selectIconStringIndex: 0, autoConfirmYesno: true,
+            totalTimeoutMs: 15000);
 
-        OnLog?.Invoke("已进入宝物库");
+        if (!interacted)
+        {
+            OnLog?.Invoke("传送门交互失败");
+            return false;
+        }
+
+        // 等待传送开始（BetweenAreas 或领土变化）
+        OnLog?.Invoke("等待进入洞...");
+        var enterStarted = await AsyncHelper.WaitUntilAsync(
+            () => Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] ||
+                  Plugin.ClientState.TerritoryType != _preDungeonTerritoryId,
+            "等待洞加载",
+            token,
+            15000,
+            200);
+
+        if (!enterStarted)
+        {
+            OnLog?.Invoke("未检测到进入洞的加载过程，可能交互失败");
+            return false;
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// 交互洞内机关
+    /// 使用名称搜索（不依赖硬编码 DataId）
+    /// </summary>
+    private async Task<bool> InteractWithDungeonObject(CancellationToken token)
+    {
+        var obj = GameObjectHelper.GetDungeonObject();
+        if (obj == null)
+        {
+            // 等待一下再试（机关可能还在加载）
+            await Task.Delay(2000, token);
+            obj = GameObjectHelper.GetDungeonObject();
+            if (obj == null)
+            {
+                OnLog?.Invoke("未找到洞内机关");
+                return false;
+            }
+        }
+
+        OnLog?.Invoke($"找到机关: {obj.Name} at ({obj.Position.X:F1}, {obj.Position.Z:F1})");
+
+        // 移动到机关附近
+        if (!GameObjectHelper.IsInInteractRange(obj, 3.0f))
+        {
+            if (VnavmeshHelper.IsAvailable())
+            {
+                await VnavmeshHelper.MoveToAsync(obj.Position, tolerance: 2.5f, fly: false, timeoutMs: 15000, token: token);
+            }
+        }
+
+        // 交互并处理对话框（机关交互后可能弹出 SelectString/SelectYesno）
+        OnLog?.Invoke("交互机关...");
+        var interacted = await GameObjectHelper.InteractWithObjectAsync(obj, token,
+            selectStringIndex: 0, selectIconStringIndex: 0, autoConfirmYesno: true,
+            totalTimeoutMs: 15000);
+
+        if (interacted)
+        {
+            await Task.Delay(_plugin.Configuration.InteractionDelay, token);
+        }
+
+        return interacted;
     }
 
     private async Task WaitForDungeonCombat(CancellationToken token)
@@ -222,32 +332,36 @@ public class PortalDungeonService : IDisposable
     private async Task OpenDungeonChest(CancellationToken token)
     {
         // 查找洞内宝箱
-        var chest = GameObjectHelper.FindNearestObjectByDataId(TreasureChestDataId);
+        var chest = GameObjectHelper.GetDungeonChest();
         if (chest == null)
         {
-            chest = GameObjectHelper.GetTreasureCoffer();
+            OnLog?.Invoke("未找到洞内宝箱，等待2秒后重试...");
+            await Task.Delay(2000, token);
+            chest = GameObjectHelper.GetDungeonChest();
+            if (chest == null)
+            {
+                OnLog?.Invoke("仍未找到洞内宝箱");
+                return;
+            }
         }
 
-        if (chest == null)
-        {
-            OnLog?.Invoke("未找到洞内宝箱");
-            return;
-        }
+        OnLog?.Invoke($"找到宝箱: {chest.Name} at ({chest.Position.X:F1}, {chest.Position.Z:F1})");
 
+        // 移动到宝箱附近
         if (!GameObjectHelper.IsInInteractRange(chest, 3.0f))
         {
-            VnavmeshHelper.PathfindAndMoveTo(chest.Position);
-            await AsyncHelper.WaitUntilAsync(
-                () => GameObjectHelper.IsInInteractRange(chest, 3.0f),
-                "到达洞内宝箱位置",
-                token,
-                15000,
-                200);
-            VnavmeshHelper.Stop();
+            if (VnavmeshHelper.IsAvailable())
+            {
+                await VnavmeshHelper.MoveToAsync(chest.Position, tolerance: 2.5f, fly: false, timeoutMs: 15000, token: token);
+            }
         }
 
-        GameObjectHelper.InteractWithObject(chest);
-        OnLog?.Invoke($"已交互宝箱: {chest.Name}");
+        // 交互开箱并处理对话框
+        OnLog?.Invoke("开箱...");
+        await GameObjectHelper.InteractWithObjectAsync(chest, token,
+            selectStringIndex: 0, selectIconStringIndex: 0, autoConfirmYesno: true,
+            totalTimeoutMs: 10000);
+
         await Task.Delay(_plugin.Configuration.InteractionDelay, token);
     }
 
@@ -255,19 +369,11 @@ public class PortalDungeonService : IDisposable
     {
         OnLog?.Invoke("等待 roll 点完成...");
 
-        // 检查 LazyLoot 是否可用，可用的话自动触发 Need Roll
+        // 检查 LazyLoot 是否可用
         if (LazyLootHelper.IsAvailable())
         {
             OnLog?.Invoke("检测到 LazyLoot，自动执行 Need Roll");
-            var rolled = LazyLootHelper.RollNeed();
-            if (rolled)
-            {
-                OnLog?.Invoke("已触发 LazyLoot Roll");
-            }
-            else
-            {
-                OnLog?.Invoke("LazyLoot Roll 触发失败，等待手动 Roll");
-            }
+            LazyLootHelper.RollNeed();
         }
         else
         {
@@ -288,58 +394,80 @@ public class PortalDungeonService : IDisposable
 
     private async Task<bool> IsBonusRoomTriggered(CancellationToken token)
     {
-        // 检查是否触发了特殊梦境（宝箱图案3连）
-        // 这需要检测当前区域或 UI 状态
-        // 特殊梦境会进入一个有90秒倒计时的场景
-        await Task.Delay(500, token);
+        await Task.Delay(1000, token);
 
-        // 检查是否有倒计时提示或进入了特殊区域
-        // 可以通过检测 ObjectTable 中是否有"輝く袋"(Shining Bag)来判断
+        // 检查是否有闪亮袋子（奖励房标志）
         var bags = GameObjectHelper.GetShiningBags();
         if (bags.Count > 0)
         {
             return true;
         }
 
+        // 检查是否有倒计时（奖励房 90 秒倒计时）
+        // 通过检查 LimitTimeController 或类似机制
+        // 简单方式：检查当前是否在不同领土或特定条件
         return false;
     }
 
     private async Task<bool> MoveToNextFloor(CancellationToken token)
     {
-        // 查找下一层入口/按钮
-        var nextFloor = GameObjectHelper.FindNearestObjectByDataId(NextFloorButtonDataId);
+        // 查找下一层入口
+        var nextFloor = GameObjectHelper.GetNextFloorEntrance();
         if (nextFloor == null)
         {
-            // 可能是被踢出了或已是最后一层
-            OnLog?.Invoke("未找到下一层入口");
-            return false;
+            await Task.Delay(2000, token);
+            nextFloor = GameObjectHelper.GetNextFloorEntrance();
+            if (nextFloor == null)
+            {
+                OnLog?.Invoke("未找到下一层入口");
+                return false;
+            }
         }
 
+        OnLog?.Invoke($"找到下一层入口: {nextFloor.Name} at ({nextFloor.Position.X:F1}, {nextFloor.Position.Z:F1})");
+
+        // 移动到入口附近
         if (!GameObjectHelper.IsInInteractRange(nextFloor, 3.0f))
         {
-            VnavmeshHelper.PathfindAndMoveTo(nextFloor.Position);
-            await AsyncHelper.WaitUntilAsync(
-                () => GameObjectHelper.IsInInteractRange(nextFloor, 3.0f),
-                "到达下一层入口",
-                token,
-                15000,
-                200);
-            VnavmeshHelper.Stop();
+            if (VnavmeshHelper.IsAvailable())
+            {
+                await VnavmeshHelper.MoveToAsync(nextFloor.Position, tolerance: 2.5f, fly: false, timeoutMs: 15000, token: token);
+            }
         }
 
-        GameObjectHelper.InteractWithObject(nextFloor);
-        OnLog?.Invoke("进入下一层");
-        await Task.Delay(2000, token);
+        // 交互并处理对话框（进入下一层可能有确认对话框）
+        OnLog?.Invoke("进入下一层...");
+        var interacted = await GameObjectHelper.InteractWithObjectAsync(nextFloor, token,
+            selectStringIndex: 0, selectIconStringIndex: 0, autoConfirmYesno: true,
+            totalTimeoutMs: 15000);
+
+        if (!interacted)
+            return false;
+
+        // 等待楼层加载
+        var preFloorTerritory = Plugin.ClientState.TerritoryType;
+        var loaded = await AsyncHelper.WaitForAreaChangeAsync(preFloorTerritory, token, 20000);
+        if (loaded)
+        {
+            await Task.Delay(1000, token);
+        }
+
         return true;
     }
 
     /// <summary>
-    /// 检测是否被踢出（强制退出）
+    /// 检测是否被踢出（领土回到进入洞前的区域）
     /// </summary>
     public bool IsKickedOut()
     {
-        // 通过检测当前是否在洞外来判断
-        // 或者检测特定的 UI 提示
+        // 如果领土回到了进入洞前的区域，说明被踢出了
+        if (_preDungeonTerritoryId != 0 && Plugin.ClientState.TerritoryType == _preDungeonTerritoryId)
+        {
+            // 排除刚开始还没进入洞的情况
+            if (_state.Phase == PortalDungeonPhase.EnteringPortal || _state.Phase == PortalDungeonPhase.Idle)
+                return false;
+            return true;
+        }
         return false;
     }
 

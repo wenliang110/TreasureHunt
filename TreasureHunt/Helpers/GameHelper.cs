@@ -118,6 +118,73 @@ public static unsafe class GameHelper
     }
 
     /// <summary>
+    /// 检查 SelectIconString 对话框是否打开
+    /// 用于解读藏宝图时的选择窗口
+    /// </summary>
+    public static bool IsSelectIconStringOpen()
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectIconString");
+        return addon != null && addon->IsVisible && addon->IsReady;
+    }
+
+    /// <summary>
+    /// 选择 SelectIconString 对话框中的指定选项
+    /// </summary>
+    public static void SelectIconStringOption(int index)
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectIconString");
+        if (addon != null && addon->IsReady)
+        {
+            AtkValue val = default;
+            val.SetInt(index);
+            addon->FireCallback(1, &val, true);
+        }
+    }
+
+    /// <summary>
+    /// 检查 SelectYesno 确认对话框是否打开
+    /// 用于解读确认、购买确认、进洞确认等场景
+    /// </summary>
+    public static bool IsSelectYesnoOpen()
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectYesno");
+        return addon != null && addon->IsVisible && addon->IsReady;
+    }
+
+    /// <summary>
+    /// 选择 SelectYesno 对话框的选项
+    /// 0 = 是(Yes), 1 = 否(No)
+    /// 参考 MapPurchaseService.ConfirmPurchaseDialog
+    /// </summary>
+    public static void SelectYesnoOption(int index)
+    {
+        var addon = RaptureAtkUnitManager.Instance()->GetAddonByName("SelectYesno");
+        if (addon != null && addon->IsReady)
+        {
+            AtkValue val = default;
+            val.SetInt(index);
+            addon->FireCallback(0, &val, true);
+        }
+    }
+
+    /// <summary>
+    /// 关闭所有游戏对话框（恢复机制）
+    /// 用于流程卡住时清理残留的对话框
+    /// </summary>
+    public static void CloseAllDialogs()
+    {
+        var dialogNames = new[] { "SelectString", "SelectIconString", "SelectYesno", "Talk", "ContextMenu" };
+        foreach (var name in dialogNames)
+        {
+            var addon = RaptureAtkUnitManager.Instance()->GetAddonByName(name);
+            if (addon != null && addon->IsVisible)
+            {
+                addon->FireCallback(unchecked((uint)-1), null, true);
+            }
+        }
+    }
+
+    /// <summary>
     /// 等待 SelectString 出现并选择指定选项
     /// 参考 AutoDuty: 等待对话框出现后自动选择
     /// </summary>

@@ -68,7 +68,6 @@ public static class AsyncHelper
             {
                 var cond = Plugin.Condition;
                 return !cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] &&
-                       !cond[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
                        GameHelper.IsTerritoryLoaded() &&
                        GameHelper.IsInteractable();
             },
@@ -77,6 +76,70 @@ public static class AsyncHelper
             timeoutMs,
             500);
     }
+
+    /// <summary>
+    /// 等待领土切换完成（进入洞/离开洞等场景）
+    /// 检测领土 ID 变化 + 区域加载完成
+    /// </summary>
+    public static async Task<bool> WaitForAreaChangeAsync(uint fromTerritoryId, CancellationToken token, int timeoutMs = 30000)
+    {
+        OnAreaChangeLog?.Invoke($"等待离开领土 {fromTerritoryId}...");
+
+        // 阶段1: 等待领土变化（先进入 BetweenAreas）
+        var changed = await WaitUntilAsync(
+            () => Plugin.ClientState.TerritoryType != fromTerritoryId ||
+                  Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas],
+            "等待区域切换开始",
+            token,
+            15000,
+            200);
+
+        if (!changed)
+        {
+            OnAreaChangeLog?.Invoke("区域切换未开始");
+            return false;
+        }
+
+        // 阶段2: 等待新区域加载完成
+        var loaded = await WaitForAreaReadyAsync(token, timeoutMs);
+        if (loaded)
+        {
+            OnAreaChangeLog?.Invoke($"新区域已加载: {Plugin.ClientState.TerritoryType}");
+        }
+        return loaded;
+    }
+
+    /// <summary>
+    /// 等待过场动画完成并处理后续对话框
+    /// 交互后可能触发过场动画，然后弹出对话框
+    /// </summary>
+    public static async Task<bool> WaitForCutsceneAndDialogsAsync(CancellationToken token, int timeoutMs = 30000)
+    {
+        // 等待过场动画（短暂等待，可能没有）
+        var hasCutscene = await WaitUntilAsync(
+            () => GameHelper.IsCutsceneActive(),
+            "等待过场动画",
+            token,
+            5000,
+            200);
+
+        if (hasCutscene)
+        {
+            var ended = await WaitUntilAsync(
+                () => !GameHelper.IsCutsceneActive(),
+                "等待过场动画结束",
+                token,
+                timeoutMs,
+                500);
+
+            if (ended)
+                await Task.Delay(1000, token);
+        }
+
+        return true;
+    }
+
+    public static event Action<string>? OnAreaChangeLog;
 
     /// <summary>
     /// 等待传送完成
