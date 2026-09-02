@@ -475,7 +475,17 @@ public class TreasureHuntOrchestrator : IDisposable
         _cts?.Cancel();
         _isRunning = false;
         _state.SetPhase(TreasureHuntPhase.Idle, "已取消");
-        OnLog?.Invoke("自动挖宝已取消");
+
+        // 关键修复：必须同时取消所有子服务的 CancellationTokenSource
+        // 否则 NavigationService 的导航循环会继续运行，导致无法停止的跳跃
+        _plugin.NavigationService.Cancel();
+        _plugin.MapDecipherService.Cancel();
+        _plugin.TreasureCofferService.Cancel();
+        _plugin.PortalDungeonService.Cancel();
+        _plugin.MoneyBagService.Cancel();
+        _plugin.MapPurchaseService.Cancel();
+
+        OnLog?.Invoke("自动挖宝已取消，所有子服务已停止");
     }
 
     public void Dispose()

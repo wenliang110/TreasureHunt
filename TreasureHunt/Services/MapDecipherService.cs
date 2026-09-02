@@ -148,14 +148,17 @@ public class MapDecipherService : IDisposable
             CloseBlockingWindows();
             await Task.Delay(500, token);
 
+            // 下坐骑（骑乘坐骑时无法使用解读技能）
+            DismountIfMounted();
+            await Task.Delay(500, token);
+
             // 使用解读技能
             if (!ExecuteDecipher())
             {
                 return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
             }
 
-            // 处理解读后弹出的选择窗口（选择要解读的藏宝图）
-            // 使用 GeneralAction 方式会弹出 SelectString 窗口；使用 ActionType.Item 可能直接解读
+            // 等待解读对话框（如果有多个藏宝图会弹出选择窗口）
             await HandleDecipherDialog(token);
 
             // 等待旗帜标记出现（解读后游戏会在 AgentMap 上放置一个 flag marker）
@@ -262,32 +265,21 @@ public class MapDecipherService : IDisposable
                 return false;
             }
 
-            // 方式1: 直接使用藏宝图道具（参考 RotationSolver: ActionType.Item）
-            // 使用道具直接解读，不弹选择窗口
-            var itemId = TreasureMapConstants.GargantuaskinItemId;
-            var itemStatus = actionManager->GetActionStatus(ActionType.Item, itemId);
-            if (itemStatus == 0)
+            // 再次检查是否骑乘坐骑
+            if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
             {
-                var itemResult = actionManager->UseAction(ActionType.Item, itemId);
-                if (itemResult)
-                {
-                    OnLog?.Invoke($"使用藏宝图道具 (ActionType.Item, ID={itemId})");
-                    return true;
-                }
-                OnLog?.Invoke("道具使用失败，回退到解读技能");
-            }
-            else
-            {
-                OnLog?.Invoke($"道具不可用 (status={itemStatus})，使用解读技能");
+                OnLog?.Invoke("仍在骑乘坐骑，尝试再次下坐骑...");
+                actionManager->UseAction(ActionType.GeneralAction, 23);
+                System.Threading.Thread.Sleep(1000);
             }
 
-            // 方式2: 使用解读技能 (GeneralAction 19)
-            // 注意: 这种方式会弹出 SelectString 选择窗口，需要后续处理
+            // 使用解读技能 (GeneralAction 19 = Decipher)
             var status = actionManager->GetActionStatus(ActionType.GeneralAction, DecipherActionId);
             if (status != 0)
             {
-                OnLog?.Invoke($"解读动作不可用 (status={status})");
-                return false;
+                OnLog?.Invoke($"解读动作不可用 (status={status})，尝试直接执行...");
+                // 不直接返回 false，尝试直接执行 UseAction
+                // 某些情况下 GetActionStatus 可能误判
             }
 
             var result = actionManager->UseAction(ActionType.GeneralAction, DecipherActionId);
@@ -354,6 +346,30 @@ public class MapDecipherService : IDisposable
         {
             OnLog?.Invoke($"执行挖掘失败: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 下坐骑（骑乘坐骑时无法使用解读/挖掘技能）
+    /// </summary>
+    private unsafe void DismountIfMounted()
+    {
+        try
+        {
+            if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
+            {
+                OnLog?.Invoke("检测到骑乘坐骑，执行下坐骑...");
+                var actionManager = ActionManager.Instance();
+                if (actionManager != null)
+                {
+                    // GeneralAction 23 = Mount/Dismount
+                    actionManager->UseAction(ActionType.GeneralAction, 23);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"下坐骑失败: {ex.Message}");
         }
     }
 
