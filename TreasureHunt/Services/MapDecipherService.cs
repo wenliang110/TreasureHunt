@@ -7,6 +7,7 @@ using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using TreasureHunt.Helpers;
 using TreasureHunt.Models;
 
@@ -27,11 +28,12 @@ public class MapDecipherService : IDisposable
 
     public event Action<string>? OnLog;
 
-    // 解读动作 ID (Decipher)
-    private const uint DecipherActionId = 12897;
+    // 解读动作 ID - GeneralAction 表行号 (19 = Decipher/解读)
+    // 使用 ActionType.GeneralAction 时传 GeneralAction 表的行号，不是 Action 表 ID (1694)
+    private const uint DecipherActionId = 19;
 
-    // 挖掘动作 ID (Dig)
-    private const uint DigActionId = 12898;
+    // 挖掘动作 ID - GeneralAction 表行号 (20 = Dig/挖掘)
+    private const uint DigActionId = 20;
 
     // 藏宝图旗帜标记默认图标 ID
     private const uint TreasureFlagIconId = 0xEC91;
@@ -142,6 +144,10 @@ public class MapDecipherService : IDisposable
                 return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
             }
 
+            // 关闭可能阻挡解读的 UI 窗口（交易板等）
+            CloseBlockingWindows();
+            await Task.Delay(500, token);
+
             // 使用解读技能
             if (!ExecuteDecipher())
             {
@@ -246,13 +252,30 @@ public class MapDecipherService : IDisposable
         try
         {
             var actionManager = ActionManager.Instance();
-            if (actionManager == null) return false;
+            if (actionManager == null)
+            {
+                OnLog?.Invoke("ActionManager 不可用");
+                return false;
+            }
 
-            // 使用解读技能
-            var actionType = ActionType.GeneralAction;
-            actionManager->UseAction(actionType, DecipherActionId);
+            // 检查解读动作是否可用（返回 0 = 可用）
+            // 参考 AutoDuty: GetActionStatus 检查动作状态（冷却、施法中、状态不符等）
+            var status = actionManager->GetActionStatus(ActionType.GeneralAction, DecipherActionId);
+            if (status != 0)
+            {
+                OnLog?.Invoke($"解读动作不可用 (status={status})，可能正在施法或有窗口阻挡");
+                return false;
+            }
 
-            OnLog?.Invoke("执行解读技能");
+            // 执行解读技能并检查返回值
+            var result = actionManager->UseAction(ActionType.GeneralAction, DecipherActionId);
+            if (!result)
+            {
+                OnLog?.Invoke("UseAction 返回 false，解读执行失败");
+                return false;
+            }
+
+            OnLog?.Invoke($"执行解读技能 (GeneralAction ID={DecipherActionId})");
             return true;
         }
         catch (Exception ex)
@@ -267,12 +290,27 @@ public class MapDecipherService : IDisposable
         try
         {
             var actionManager = ActionManager.Instance();
-            if (actionManager == null) return false;
+            if (actionManager == null)
+            {
+                OnLog?.Invoke("ActionManager 不可用");
+                return false;
+            }
 
-            var actionType = ActionType.GeneralAction;
-            actionManager->UseAction(actionType, DigActionId);
+            var status = actionManager->GetActionStatus(ActionType.GeneralAction, DigActionId);
+            if (status != 0)
+            {
+                OnLog?.Invoke($"挖掘动作不可用 (status={status})");
+                return false;
+            }
 
-            OnLog?.Invoke("执行挖掘技能");
+            var result = actionManager->UseAction(ActionType.GeneralAction, DigActionId);
+            if (!result)
+            {
+                OnLog?.Invoke("UseAction 返回 false，挖掘执行失败");
+                return false;
+            }
+
+            OnLog?.Invoke($"执行挖掘技能 (GeneralAction ID={DigActionId})");
             return true;
         }
         catch (Exception ex)
@@ -280,6 +318,29 @@ public class MapDecipherService : IDisposable
             OnLog?.Invoke($"执行挖掘失败: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 关闭可能阻挡解读/挖掘的 UI 窗口
+    /// 参考 MapPurchaseService.CloseAllMarketWindows
+    /// </summary>
+    private unsafe void CloseBlockingWindows()
+    {
+        try
+        {
+            var addonNames = new[] { "ItemSearch", "ItemSearchResult", "SelectYesno" };
+            foreach (var name in addonNames)
+            {
+                var addon = Plugin.GameGui.GetAddonByName(name);
+                if (addon.Address != IntPtr.Zero)
+                {
+                    var atk = (AtkUnitBase*)addon.Address;
+                    atk->FireCallback(unchecked((uint)-1), null, true);
+                    OnLog?.Invoke($"已关闭窗口: {name}");
+                }
+            }
+        }
+        catch { }
     }
 
     /// <summary>
