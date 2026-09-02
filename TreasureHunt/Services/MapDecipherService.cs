@@ -54,48 +54,37 @@ public class MapDecipherService : IDisposable
         var invManager = InventoryManager.Instance();
         if (invManager == null) return false;
 
-        var inventory = invManager->GetInventoryContainer(InventoryType.Inventory1);
-        for (var i = 0; i < inventory->Size; i++)
+        var itemId = TreasureMapConstants.GargantuaskinItemId;
+
+        var inventoryTypes = new[]
         {
-            var invItem = inventory->GetInventorySlot(i);
-            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
+            (InventoryType.Inventory1, "背包1"),
+            (InventoryType.Inventory2, "背包2"),
+            (InventoryType.Inventory3, "背包3"),
+            (InventoryType.Inventory4, "背包4"),
+            (InventoryType.SaddleBag1, "鞍囊1"),
+            (InventoryType.SaddleBag2, "鞍囊2"),
+        };
+
+        foreach (var (invType, label) in inventoryTypes)
+        {
+            var container = invManager->GetInventoryContainer(invType);
+            if (container == null) continue;
+
+            for (var i = 0; i < container->Size; i++)
             {
-                item = *invItem;
-                slot = i;
-                OnLog?.Invoke($"在背包槽位 {i} 找到藏宝图");
-                return true;
+                var invItem = container->GetInventorySlot(i);
+                if (invItem->ItemId == itemId)
+                {
+                    item = *invItem;
+                    slot = i;
+                    OnLog?.Invoke($"在{label}槽位 {i} 找到藏宝图");
+                    return true;
+                }
             }
         }
 
-        // 检查其他背包
-        var inventory2 = invManager->GetInventoryContainer(InventoryType.Inventory2);
-        for (var i = 0; i < inventory2->Size; i++)
-        {
-            var invItem = inventory2->GetInventorySlot(i);
-            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
-            {
-                item = *invItem;
-                slot = i;
-                OnLog?.Invoke($"在背包2槽位 {i} 找到藏宝图");
-                return true;
-            }
-        }
-
-        // 检查 chocobo saddlebag (陆行鸟鞍囊)
-        var saddlebag = invManager->GetInventoryContainer(InventoryType.SaddleBag1);
-        for (var i = 0; i < saddlebag->Size; i++)
-        {
-            var invItem = saddlebag->GetInventorySlot(i);
-            if (invItem->ItemId == TreasureMapConstants.GargantuaskinItemId)
-            {
-                item = *invItem;
-                slot = i;
-                OnLog?.Invoke($"在鞍囊槽位 {i} 找到藏宝图");
-                return true;
-            }
-        }
-
-        OnLog?.Invoke("背包中未找到 Gargantuaskin 藏宝图");
+        OnLog?.Invoke("背包中未找到 Gargantuaskin 藏宝图 (已检查背包1-4+鞍囊1-2)");
         return false;
     }
 
