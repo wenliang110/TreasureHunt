@@ -154,6 +154,10 @@ public class MapDecipherService : IDisposable
                 return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
             }
 
+            // 处理解读后弹出的选择窗口（选择要解读的藏宝图）
+            // 使用 GeneralAction 方式会弹出 SelectString 窗口；使用 ActionType.Item 可能直接解读
+            await HandleDecipherDialog(token);
+
             // 等待旗帜标记出现（解读后游戏会在 AgentMap 上放置一个 flag marker）
             if (!await WaitForFlagMarker(token))
             {
@@ -258,16 +262,34 @@ public class MapDecipherService : IDisposable
                 return false;
             }
 
-            // 检查解读动作是否可用（返回 0 = 可用）
-            // 参考 AutoDuty: GetActionStatus 检查动作状态（冷却、施法中、状态不符等）
+            // 方式1: 直接使用藏宝图道具（参考 RotationSolver: ActionType.Item）
+            // 使用道具直接解读，不弹选择窗口
+            var itemId = TreasureMapConstants.GargantuaskinItemId;
+            var itemStatus = actionManager->GetActionStatus(ActionType.Item, itemId);
+            if (itemStatus == 0)
+            {
+                var itemResult = actionManager->UseAction(ActionType.Item, itemId);
+                if (itemResult)
+                {
+                    OnLog?.Invoke($"使用藏宝图道具 (ActionType.Item, ID={itemId})");
+                    return true;
+                }
+                OnLog?.Invoke("道具使用失败，回退到解读技能");
+            }
+            else
+            {
+                OnLog?.Invoke($"道具不可用 (status={itemStatus})，使用解读技能");
+            }
+
+            // 方式2: 使用解读技能 (GeneralAction 19)
+            // 注意: 这种方式会弹出 SelectString 选择窗口，需要后续处理
             var status = actionManager->GetActionStatus(ActionType.GeneralAction, DecipherActionId);
             if (status != 0)
             {
-                OnLog?.Invoke($"解读动作不可用 (status={status})，可能正在施法或有窗口阻挡");
+                OnLog?.Invoke($"解读动作不可用 (status={status})");
                 return false;
             }
 
-            // 执行解读技能并检查返回值
             var result = actionManager->UseAction(ActionType.GeneralAction, DecipherActionId);
             if (!result)
             {
@@ -281,6 +303,75 @@ public class MapDecipherService : IDisposable
         catch (Exception ex)
         {
             OnLog?.Invoke($"执行解读失败: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 处理解读后弹出的选择窗口
+    /// 使用解读技能后，游戏弹出 SelectString/SelectIconString 让玩家选择要解读的地图
+    /// 参考 ECommons AddonMaster.SelectString: Callback.Fire(addon, true, index)
+    /// 参考 SND 脚本: /callback SelectString true 0
+    /// 参考 MapPurchaseService.ConfirmPurchaseDialog 的 FireCallback 模式
+    /// </summary>
+    private async Task HandleDecipherDialog(CancellationToken token)
+    {
+        var waitStart = DateTime.Now;
+        bool dialogFound = false;
+
+        while ((DateTime.Now - waitStart).TotalSeconds < 5)
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (SelectDialogOption("SelectString", 0))
+            {
+                dialogFound = true;
+                break;
+            }
+
+            if (SelectDialogOption("SelectIconString", 0))
+            {
+                dialogFound = true;
+                break;
+            }
+
+            await Task.Delay(200, token);
+        }
+
+        if (dialogFound)
+        {
+            await Task.Delay(500, token);
+        }
+        else
+        {
+            OnLog?.Invoke("未出现解读选择窗口，可能已直接解读");
+        }
+    }
+
+    /// <summary>
+    /// 在选择窗口中选择指定选项
+    /// callback ID = 选项索引 (0 = 第一项)
+    /// </summary>
+    private unsafe bool SelectDialogOption(string addonName, int optionIndex)
+    {
+        var addon = Plugin.GameGui.GetAddonByName(addonName);
+        if (addon.Address == IntPtr.Zero) return false;
+
+        try
+        {
+            var atk = (AtkUnitBase*)addon.Address;
+            // 参考 MapPurchaseService 的 SelectYesno 处理模式
+            // callback ID = 选项索引, AtkValue 携带选项索引
+            var atkValues = stackalloc AtkValue[1];
+            atkValues[0].Type = AtkValueType.Int;
+            atkValues[0].Int = optionIndex;
+            atk->FireCallback((uint)optionIndex, atkValues, true);
+            OnLog?.Invoke($"已在 {addonName} 中选择第 {optionIndex + 1} 项");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"选择窗口选项失败: {ex.Message}");
             return false;
         }
     }

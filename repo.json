@@ -7,13 +7,13 @@
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
     "RepoUrl": "https://github.com/wenliang110/TreasureHunt",
-    "Changelog": "v0.2.6.0 - 修复解读藏宝图完全不工作的问题\n1. 严重修复: DecipherActionId 从 12897 改为 19(12897是云香蕉物品ID,不是解读动作ID)\n2. 严重修复: DigActionId 从 12898 改为 20(同理,12898不是挖掘动作ID)\n3. 改进: 解读前检查 GetActionStatus,动作不可用时给出明确原因\n4. 改进: 检查 UseAction 返回值,执行失败时报告\n5. 改进: 解读前自动关闭交易板等阻挡窗口",
-    "AssemblyVersion": "0.2.6.0",
+    "Changelog": "v0.2.7.0 - 修复解读后弹出选择窗口未处理导致超时\n1. 新增: 优先使用 ActionType.Item 直接使用藏宝图道具(参考RotationSolver),可能跳过选择窗口\n2. 新增: 自动处理 SelectString/SelectIconString 选择窗口(参考ECommons AddonMaster+SND脚本)\n3. 新增: HandleDecipherDialog 方法等待并自动选择第一项藏宝图\n4. 保留: GeneralAction 19 作为回退方案\n5. 参考: RotationSolver的ActionType.Item用法, ECommons的Callback.Fire模式, AutoDuty的对话框处理",
+    "AssemblyVersion": "0.2.7.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.6.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.6.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.7.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.2.7.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788680000"
+    "LastUpdate": "1788770000"
   }
 ]
