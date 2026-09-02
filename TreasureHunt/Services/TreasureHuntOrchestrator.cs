@@ -98,6 +98,14 @@ public class TreasureHuntOrchestrator : IDisposable
             var matchedLoc = decipherResult.MatchedLocation;
             OnLog?.Invoke($"解读成功，坐标: ({mapData?.Location?.MapX}, {mapData?.Location?.MapY})");
 
+            // 解读后等待 6 秒，确保游戏完成地图标记渲染和数据写入
+            OnLog?.Invoke("解读完成，等待 6 秒后传送...");
+            for (var i = 6; i > 0; i--)
+            {
+                OnLog?.Invoke($"等待 {i} 秒...");
+                await Task.Delay(1000, token);
+            }
+
             // === 步骤3: 传送到最近晶石（仅当不在挖宝地图时）===
             if (_plugin.Configuration.EnableAutoTeleport && matchedLoc != null)
             {

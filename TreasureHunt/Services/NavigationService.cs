@@ -81,8 +81,6 @@ public class NavigationService : IDisposable
             {
                 OnLog?.Invoke($"距离目标 {distance:F1}m，尝试传送...");
 
-                // 注意：这里需要知道目标所在领土才能选择正确的水晶
-                // 如果当前领土和目标领土相同，则直接导航
                 var currentTerritory = Plugin.ClientState.TerritoryType;
                 var targetTerritory = GuessTargetTerritory(destination);
 
@@ -92,6 +90,21 @@ public class NavigationService : IDisposable
                     if (!await TeleportToNearestAetheryte(destination, targetTerritory, token))
                     {
                         OnLog?.Invoke("传送失败，尝试直接导航");
+                    }
+                    else
+                    {
+                        State = NavigationState.WaitingForLoad;
+                        await WaitForAreaLoad(token);
+                        await Task.Delay(1500, token);
+                    }
+                }
+                else if (distance > 500.0f)
+                {
+                    // 同区域但距离超过 500m，传送到最近水晶再导航
+                    OnLog?.Invoke($"同区域但距离 {distance:F1}m 过远，传送到最近水晶...");
+                    if (!await TeleportToNearestAetheryte(destination, currentTerritory, token))
+                    {
+                        OnLog?.Invoke("同区域传送失败，尝试直接导航");
                     }
                     else
                     {
