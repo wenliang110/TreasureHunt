@@ -6,13 +6,13 @@
     "Punchline": "FF14 自动挖宝插件 - 藏宝图全流程自动化",
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
-    "Changelog": "v0.3.2.0 - 修复背包3/4里的藏宝图无法找到导致反复购买和无法解读\n1. FindMapInInventory 之前只检查背包1+背包2+鞍囊1，漏掉了背包3和背包4\n2. 现在 GetMapCountInInventory 报告有1张图但 FindMapInInventory 找不到，导致插件反复尝试购买\n3. 修复后检查全部6个容器(背包1-4+鞍囊1-2)，与 GetMapCountInInventory 一致",
-    "AssemblyVersion": "0.3.2.0",
+    "Changelog": "v0.3.3.0 - 修复解读对话框未被处理导致超时\n1. 修复关键Bug: ExecuteDecipher后游戏弹出解读对话框(SelectYesno)，但插件没等对话框出现就跳过去等地图标记\n2. HandleDecipherDialog现在先轮询等待8秒检测对话框出现，再调用ProcessDialogSequence处理\n3. ExecuteDecipher后增加500ms延迟，给游戏时间弹出对话框",
+    "AssemblyVersion": "0.3.3.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.2.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.2.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.3.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.3.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788953400"
+    "LastUpdate": "1788954000"
   }
 ]
