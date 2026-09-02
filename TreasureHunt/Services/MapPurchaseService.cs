@@ -870,9 +870,9 @@ public class MapPurchaseService : IDisposable
     }
 
     /// <summary>
-    /// 搜索藏宝图（参考 SND 脚本：/callback ItemSearch true 9 false false 名称 ID false false false）
-    /// callback 9 = 搜索按钮，参数：[isHQ, isExact, itemName, itemId, unknown1, unknown2, unknown3]
-    /// 搜索后用 callback 5 轮询等待结果出现（SND 脚本的标准做法）
+    /// 搜索藏宝图（参考 SND 脚本完整流程）
+    /// SND: /callback ItemSearch true 9 false false 陈旧的卡冈图亚革地图 46185 false false false
+    /// 流程：1.设置搜索文本 → 2.callback 9 搜索 → 3.等3秒 → 4.callback 5 轮询等待 ItemSearchResult
     /// </summary>
     private async Task<bool> SearchForMap(CancellationToken token)
     {
@@ -881,8 +881,13 @@ public class MapPurchaseService : IDisposable
             var itemId = _plugin.Configuration.TreasureMapItemId;
             OnLog?.Invoke($"搜索藏宝图: {SearchKeywordCN} (ID={itemId})");
 
-            // 直接通过 callback 9 搜索（带物品名称和 ID）
+            // 步骤1：设置搜索文本（模拟用户在搜索框输入文字）
+            SetSearchTextSafe(SearchKeywordCN);
+            await Task.Delay(500, token);
+
+            // 步骤2：通过 callback 9 执行搜索
             // 参考 SND: /callback ItemSearch true 9 false false 陈旧的卡冈图亚革地图 46185 false false false
+            // 参数：[isHQ=false, isExact=false, itemName, itemId(数字!), unknown=false, unknown=false, unknown=false]
             unsafe
             {
                 var addon = GetItemSearchAddonPtr();
@@ -896,42 +901,38 @@ public class MapPurchaseService : IDisposable
                 atkValues[0].Type = AtkValueType.Bool;
                 atkValues[0].Byte = 0; // isHQ = false
                 atkValues[1].Type = AtkValueType.Bool;
-                atkValues[1].Byte = 0; // isExact = false
+                atkValues[1].Byte = 0; // isExact = false (部分一致)
 
-                // 物品名称
+                // 物品名称（字符串）
                 var nameBytes = System.Text.Encoding.UTF8.GetBytes(SearchKeywordCN + "\0");
                 fixed (byte* pName = nameBytes)
                 {
                     atkValues[2].Type = AtkValueType.String;
                     atkValues[2].String = (InteropGenerator.Runtime.CStringPointer)pName;
 
-                    // 物品 ID（作为字符串传递，与 SND 脚本一致）
-                    atkValues[3].Type = AtkValueType.String;
-                    var idStr = itemId.ToString();
-                    var idBytes = System.Text.Encoding.UTF8.GetBytes(idStr + "\0");
-                    fixed (byte* pId = idBytes)
-                    {
-                        atkValues[3].String = (InteropGenerator.Runtime.CStringPointer)pId;
+                    // 物品 ID — SND 脚本传的是数字 46185，不是字符串！
+                    atkValues[3].Type = AtkValueType.Int;
+                    atkValues[3].Int = (int)itemId;
 
-                        atkValues[4].Type = AtkValueType.Bool;
-                        atkValues[4].Byte = 0;
-                        atkValues[5].Type = AtkValueType.Bool;
-                        atkValues[5].Byte = 0;
-                        atkValues[6].Type = AtkValueType.Bool;
-                        atkValues[6].Byte = 0;
+                    atkValues[4].Type = AtkValueType.Bool;
+                    atkValues[4].Byte = 0;
+                    atkValues[5].Type = AtkValueType.Bool;
+                    atkValues[5].Byte = 0;
+                    atkValues[6].Type = AtkValueType.Bool;
+                    atkValues[6].Byte = 0;
 
-                        addon->FireCallback(9, atkValues, true); // isEventBubbled = true
-                    }
+                    addon->FireCallback(9, atkValues, true);
                 }
             }
 
-            OnLog?.Invoke("搜索指令已发送，等待结果加载...");
+            OnLog?.Invoke("搜索指令已发送");
 
-            // 参考 SND 脚本：轮询等待搜索结果
-            // while not Addons.GetAddon("ItemSearchResult").Exists do
-            //   yield("/callback ItemSearch true 5 0")
-            //   yield("/wait 0.5")
-            // end
+            // 步骤3：等待搜索结果加载（SND 脚本：yield("/wait 3")）
+            await Task.Delay(3000, token);
+
+            // 步骤4：轮询等待 ItemSearchResult 窗口出现
+            // 参考 SND: while not ItemSearchResult.Exists do /callback ItemSearch true 5 0 / /wait 0.5/ end
+            // callback 5 = 选择/点击第一个搜索结果，会打开 ItemSearchResult 窗口
             var waitStart = DateTime.Now;
             var pollCount = 0;
             while ((DateTime.Now - waitStart).TotalSeconds < 10)
@@ -940,11 +941,11 @@ public class MapPurchaseService : IDisposable
 
                 if (IsItemSearchResultOpen())
                 {
-                    OnLog?.Invoke($"搜索结果已加载（轮询{pollCount}次）");
+                    OnLog?.Invoke($"搜索结果窗口已打开（轮询{pollCount}次）");
                     return true;
                 }
 
-                // 每 500ms 发送一次 callback 5 来刷新/选择结果（与 SND 脚本一致）
+                // 发送 callback 5 选择第一个结果（会触发 ItemSearchResult 窗口打开）
                 pollCount++;
                 unsafe
                 {
@@ -953,7 +954,7 @@ public class MapPurchaseService : IDisposable
                     {
                         var pollValues = stackalloc AtkValue[1];
                         pollValues[0].Type = AtkValueType.Int;
-                        pollValues[0].Int = 0;
+                        pollValues[0].Int = 0; // 选择第一个结果
                         addon->FireCallback(5, pollValues, true);
                     }
                 }
@@ -973,36 +974,49 @@ public class MapPurchaseService : IDisposable
     }
 
     /// <summary>
-    /// 选择第一个搜索结果（参考 SND：/callback ItemSearch true 5 0）
-    /// callback 5 = 选择搜索结果，参数 0 = 第一个结果
+    /// 选择第一个搜索结果
+    /// 搜索阶段已通过 callback 5 打开 ItemSearchResult 窗口
+    /// 这里只需确认 ItemSearchResult 已打开，并等待数据加载
     /// </summary>
     private async Task<bool> SelectSearchResult(CancellationToken token)
     {
         try
         {
-            unsafe
+            if (!IsItemSearchResultOpen())
             {
-                var addon = GetItemSearchAddonPtr();
-                if (addon == null)
+                // 如果还没打开，再尝试 callback 5
+                unsafe
                 {
-                    OnLog?.Invoke("ItemSearch addon 不存在");
-                    return false;
+                    var addon = GetItemSearchAddonPtr();
+                    if (addon == null)
+                    {
+                        OnLog?.Invoke("ItemSearch addon 不存在");
+                        return false;
+                    }
+
+                    var atkValues = stackalloc AtkValue[1];
+                    atkValues[0].Type = AtkValueType.Int;
+                    atkValues[0].Int = 0;
+
+                    addon->FireCallback(5, atkValues, true);
                 }
 
-                var atkValues = stackalloc AtkValue[1];
-                atkValues[0].Type = AtkValueType.Int;
-                atkValues[0].Int = 0; // 第一个结果索引
+                await Task.Delay(2000, token);
 
-                addon->FireCallback(5, atkValues, true); // isEventBubbled = true
+                if (!IsItemSearchResultOpen())
+                {
+                    OnLog?.Invoke("ItemSearchResult 窗口未打开");
+                    return false;
+                }
             }
 
-            OnLog?.Invoke("选择第一个搜索结果");
+            OnLog?.Invoke("搜索结果窗口已确认打开，等待数据加载...");
             await Task.Delay(1500, token);
             return true;
         }
         catch (Exception ex)
         {
-            OnLog?.Invoke($"选择搜索结果失败: {ex.Message}");
+            OnLog?.Invoke($"选择结果失败: {ex.Message}");
             return false;
         }
     }
