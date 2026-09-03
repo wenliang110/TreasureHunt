@@ -91,7 +91,8 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 解读藏宝图
-    /// 流程: 解读 → 使用已解读的道具刷新旗帜标记 → 读取旗帜坐标
+    /// 正确流程: 解读(GeneralAction 19) → 背包出现已解读道具(2003785) → 使用该道具打开地图并放置旗帜标记 → 读取旗帜坐标
+    /// 关键修复：旗帜标记不会在解读后自动出现，必须先使用已解读的道具才会出现
     /// </summary>
     public async Task<DecipherResult> DecipherMapAsync()
     {
@@ -100,13 +101,19 @@ public class MapDecipherService : IDisposable
 
         try
         {
-            // 检查是否已有解读过的地图（flag marker 存在）
+            // 策略1: 检查是否已有旗帜标记（之前已解读并使用过道具）
             if (HasDecipheredMap())
             {
-                OnLog?.Invoke("检测到已有解读过的地图，使用道具刷新坐标...");
-                // 使用已解读的道具刷新 flag marker
+                OnLog?.Invoke("检测到已有地图标记，使用道具刷新坐标...");
                 await UseDecipheredMapItem(token);
             }
+            // 策略2: 检查背包是否已有已解读的道具(2003785)但尚未使用
+            else if (FindDecipheredMapInInventory())
+            {
+                OnLog?.Invoke("背包中找到已解读的藏宝图(2003785)，使用道具获取坐标...");
+                await UseDecipheredMapItem(token);
+            }
+            // 策略3: 需要先解读未解读的藏宝图(46185)
             else
             {
                 // 查找未解读的藏宝图
@@ -135,15 +142,37 @@ public class MapDecipherService : IDisposable
                 // 等待解读对话框并自动确认（选择地图 → 确认解读）
                 await HandleDecipherDialog(token);
 
-                // 等待旗帜标记出现
-                if (!await WaitForFlagMarker(token))
+                // 等待解读完成，已解读道具(2003785)出现在背包中
+                OnLog?.Invoke("等待解读完成，检测已解读道具...");
+                var decipherWaitStart = DateTime.Now;
+                var decipherComplete = false;
+                while ((DateTime.Now - decipherWaitStart).TotalSeconds < 10)
                 {
-                    return new DecipherResult { Success = false, ErrorMessage = "解读后未检测到地图标记" };
+                    token.ThrowIfCancellationRequested();
+                    if (FindDecipheredMapInInventory())
+                    {
+                        decipherComplete = true;
+                        OnLog?.Invoke("检测到已解读道具出现在背包中");
+                        break;
+                    }
+                    await Task.Delay(500, token);
                 }
 
-                // 解读后再使用一次道具，确保 flag marker 数据是最新的
-                OnLog?.Invoke("使用已解读的道具刷新旗帜标记...");
+                if (!decipherComplete)
+                {
+                    OnLog?.Invoke("警告: 未检测到已解读道具，尝试直接使用道具...");
+                }
+
+                // 关键步骤：使用已解读的道具打开地图并放置旗帜标记
+                // 旗帜标记只有在使用道具后才会出现，不会在解读后自动出现
+                OnLog?.Invoke("使用已解读的道具获取旗帜标记...");
                 await UseDecipheredMapItem(token);
+            }
+
+            // 等待旗帜标记出现（使用道具后应该已经出现）
+            if (!await WaitForFlagMarker(token))
+            {
+                return new DecipherResult { Success = false, ErrorMessage = "未检测到地图标记（使用道具后仍未出现旗帜标记）" };
             }
 
             // 读取解读后的地图信息
@@ -188,6 +217,46 @@ public class MapDecipherService : IDisposable
             _cts?.Dispose();
             _cts = null;
         }
+    }
+
+    /// <summary>
+    /// 在背包中查找已解读的藏宝图 (ItemID=2003785)
+    /// 解读后道具变为"卡冈图亚革制的宝物地图"，可能出现在任意背包分页
+    /// </summary>
+    public unsafe bool FindDecipheredMapInInventory()
+    {
+        var invManager = InventoryManager.Instance();
+        if (invManager == null) return false;
+
+        var decipheredItemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
+
+        var inventoryTypes = new[]
+        {
+            (InventoryType.Inventory1, "背包1"),
+            (InventoryType.Inventory2, "背包2"),
+            (InventoryType.Inventory3, "背包3"),
+            (InventoryType.Inventory4, "背包4"),
+            (InventoryType.SaddleBag1, "鞍囊1"),
+            (InventoryType.SaddleBag2, "鞍囊2"),
+        };
+
+        foreach (var (invType, label) in inventoryTypes)
+        {
+            var container = invManager->GetInventoryContainer(invType);
+            if (container == null) continue;
+
+            for (var i = 0; i < container->Size; i++)
+            {
+                var invItem = container->GetInventorySlot(i);
+                if (invItem->ItemId == decipheredItemId)
+                {
+                    OnLog?.Invoke($"在{label}槽位 {i} 找到已解读的藏宝图 (ID={decipheredItemId})");
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
