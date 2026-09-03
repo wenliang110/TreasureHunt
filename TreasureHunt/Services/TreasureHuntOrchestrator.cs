@@ -128,7 +128,69 @@ public class TreasureHuntOrchestrator : IDisposable
                 }
                 else if (targetTerritory == currentTerritory)
                 {
-                    OnLog?.Invoke($"已在目标领土 {currentTerritory}，无需传送");
+                    // 同领土内：检查玩家与标点的距离
+                    // 如果距离很远（如1092m），需要传送到离标点最近的水晶
+                    var player = Plugin.ObjectTable.LocalPlayer;
+                    if (player != null && mapData.Location.WorldPosition != Vector3.Zero)
+                    {
+                        var distToTarget = Vector3.Distance(player.Position, mapData.Location.WorldPosition);
+                        OnLog?.Invoke($"同领土内，距离标点 {distToTarget:F1}m");
+
+                        if (distToTarget > 200.0f)
+                        {
+                            // 距离太远，需要传送到离标点最近的水晶
+                            _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送到最近水晶...");
+                            PhaseChanged?.Invoke(_state.Phase);
+
+                            // 优先使用匹配点位的最近水晶
+                            var aetheryteId = matchedLoc?.NearestAetheryteId ?? 0;
+                            if (aetheryteId != 0)
+                            {
+                                OnLog?.Invoke($"传送到离标点最近的水晶: {matchedLoc?.NearestAetheryteNameCN} (ID={aetheryteId})");
+                            }
+                            else
+                            {
+                                aetheryteId = FindAetheryteByTerritory(targetTerritory);
+                                OnLog?.Invoke($"回退到领土水晶 (ID={aetheryteId})");
+                            }
+
+                            if (aetheryteId != 0)
+                            {
+                                // 传送到水晶（不需要验证领土切换，因为同领土）
+                                OnLog?.Invoke($"传送中: 水晶 ID={aetheryteId}");
+                                var aetheryteName = AetheryteHelper.GetAetheryteName(aetheryteId);
+                                OnLog?.Invoke($"传送到水晶: {aetheryteName} (ID={aetheryteId})");
+                                var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                                if (!teleResult.Success)
+                                {
+                                    OnLog?.Invoke($"传送失败: {teleResult.ErrorMessage}");
+                                }
+                                else
+                                {
+                                    // 等待传送完成（10-15秒）
+                                    OnLog?.Invoke("等待传送完成...");
+                                    for (var i = 12; i > 0; i--)
+                                    {
+                                        OnLog?.Invoke($"等待 {i} 秒...");
+                                        await Task.Delay(1000, token);
+                                    }
+                                    OnLog?.Invoke("传送完成，开始导航");
+                                }
+                            }
+                            else
+                            {
+                                OnLog?.Invoke("未找到可用水晶，直接导航");
+                            }
+                        }
+                        else
+                        {
+                            OnLog?.Invoke($"距离标点仅 {distToTarget:F1}m，无需传送，直接导航");
+                        }
+                    }
+                    else
+                    {
+                        OnLog?.Invoke($"已在目标领土 {currentTerritory}，无法计算距离，直接导航");
+                    }
                 }
                 else
                 {

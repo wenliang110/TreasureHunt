@@ -253,6 +253,7 @@ public class NavigationService : IDisposable
     /// <summary>
     /// 确保玩家在坐骑上（导航远距离时自动上坐骑）
     /// 如果已经在坐骑上或在飞行中则直接返回
+    /// 参考 GatherBuddy: 使用 GetActionStatus 检查后 UseAction
     /// </summary>
     private async Task EnsureMounted(CancellationToken token)
     {
@@ -261,56 +262,114 @@ public class NavigationService : IDisposable
             if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted] ||
                 Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InFlight])
             {
+                OnLog?.Invoke("已在坐骑上");
                 return;
             }
 
             // 检查是否在战斗中或其他不能上坐骑的状态
             if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
                 Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Casting] ||
-                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas])
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas] ||
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Jumping] ||
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Jumping61])
             {
                 OnLog?.Invoke("当前状态无法上坐骑，跳过");
                 return;
             }
 
+            // 先检查坐骑技能是否可用
+            var (statusOk, statusValue) = CheckMountActionStatus();
+            if (!statusOk)
+            {
+                OnLog?.Invoke($"坐骑技能不可用 (status={statusValue})，尝试继续步行导航");
+                return;
+            }
+
             OnLog?.Invoke("正在上坐骑...");
 
-            unsafe
-            {
-                var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
-                if (actionManager != null)
-                {
-                    // GeneralAction 23 = Mount/Dismount
-                    var result = actionManager->UseAction(FFXIVClientStructs.FFXIV.Client.Game.ActionType.GeneralAction, 23);
-                    if (!result)
-                    {
-                        OnLog?.Invoke("上坐骑失败，尝试继续步行导航");
-                        return;
-                    }
-                }
-            }
-
-            // 等待上坐骑完成（最多 3 秒）
-            var waitStart = DateTime.Now;
-            while ((DateTime.Now - waitStart).TotalSeconds < 3)
+            // 尝试上坐骑（最多重试 3 次）
+            var mountSuccess = false;
+            for (var attempt = 0; attempt < 3; attempt++)
             {
                 token.ThrowIfCancellationRequested();
+
+                // 重新检查状态
                 if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
                 {
-                    OnLog?.Invoke("已上坐骑");
+                    mountSuccess = true;
                     break;
                 }
-                await Task.Delay(200, token);
+
+                OnLog?.Invoke($"上坐骑尝试 {attempt + 1}/3");
+                ExecuteMountAction();
+
+                // 等待上坐骑完成（每次最多 5 秒）
+                var waitStart = DateTime.Now;
+                while ((DateTime.Now - waitStart).TotalSeconds < 5)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
+                    {
+                        mountSuccess = true;
+                        OnLog?.Invoke("已上坐骑");
+                        break;
+                    }
+                    await Task.Delay(200, token);
+                }
+
+                if (mountSuccess) break;
+
+                // 等待 1 秒后重试
+                if (attempt < 2)
+                {
+                    OnLog?.Invoke("上坐骑未成功，等待后重试...");
+                    await Task.Delay(1000, token);
+                }
             }
 
-            // 额外等待 0.5 秒让坐骑稳定
-            await Task.Delay(500, token);
+            if (!mountSuccess)
+            {
+                OnLog?.Invoke("上坐骑失败（3次重试均未成功），继续步行导航");
+            }
+            else
+            {
+                // 额外等待 1 秒让坐骑稳定
+                await Task.Delay(1000, token);
+                OnLog?.Invoke("坐骑已稳定，开始导航");
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             OnLog?.Invoke($"上坐骑异常: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 检查坐骑技能状态（unsafe 操作隔离）
+    /// </summary>
+    private unsafe (bool ok, uint status) CheckMountActionStatus()
+    {
+        var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
+        if (actionManager == null)
+            return (false, 9999);
+
+        var actionType = FFXIVClientStructs.FFXIV.Client.Game.ActionType.GeneralAction;
+        var actionId = 23u;
+        var status = actionManager->GetActionStatus(actionType, actionId);
+        return (status == 0, status);
+    }
+
+    /// <summary>
+    /// 执行上坐骑动作（unsafe 操作隔离）
+    /// </summary>
+    private unsafe void ExecuteMountAction()
+    {
+        var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
+        if (actionManager == null) return;
+
+        actionManager->UseAction(
+            FFXIVClientStructs.FFXIV.Client.Game.ActionType.GeneralAction, 23);
     }
 
     /// <summary>
