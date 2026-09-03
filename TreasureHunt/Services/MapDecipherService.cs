@@ -55,6 +55,7 @@ public class MapDecipherService : IDisposable
         if (invManager == null) return false;
 
         var itemId = TreasureMapConstants.GargantuaskinItemId;
+        var decipheredItemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
 
         var inventoryTypes = new[]
         {
@@ -74,7 +75,7 @@ public class MapDecipherService : IDisposable
             for (var i = 0; i < container->Size; i++)
             {
                 var invItem = container->GetInventorySlot(i);
-                if (invItem->ItemId == itemId)
+                if (invItem->ItemId == itemId || invItem->ItemId == decipheredItemId)
                 {
                     item = *invItem;
                     slot = i;
@@ -90,7 +91,7 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 解读藏宝图
-    /// 如果已有解读过的地图（flag marker 存在），直接读取已有数据，不重复解读
+    /// 流程: 解读 → 使用已解读的道具刷新旗帜标记 → 读取旗帜坐标
     /// </summary>
     public async Task<DecipherResult> DecipherMapAsync()
     {
@@ -102,61 +103,47 @@ public class MapDecipherService : IDisposable
             // 检查是否已有解读过的地图（flag marker 存在）
             if (HasDecipheredMap())
             {
-                OnLog?.Invoke("检测到已有解读过的地图，直接读取坐标");
-
-                // 直接读取已有 flag marker 数据
-                var existingMapData = ReadDecipheredMap(token);
-                if (existingMapData != null)
+                OnLog?.Invoke("检测到已有解读过的地图，使用道具刷新坐标...");
+                // 使用已解读的道具刷新 flag marker
+                await UseDecipheredMapItem(token);
+            }
+            else
+            {
+                // 查找未解读的藏宝图
+                if (!FindMapInInventory(out _, out _))
                 {
-                    var existingMatchedLoc = MapLocationDatabase.FindByCoordinates(
-                        existingMapData.Location?.MapX ?? 0,
-                        existingMapData.Location?.MapY ?? 0);
-
-                    if (existingMatchedLoc != null)
-                        OnLog?.Invoke($"匹配到点位: ({existingMatchedLoc.MapX}, {existingMatchedLoc.MapY}) 水晶: {existingMatchedLoc.NearestAetheryteNameCN}");
-
-                    return new DecipherResult
-                    {
-                        Success = true,
-                        MapData = existingMapData,
-                        MatchedLocation = existingMatchedLoc
-                    };
+                    return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
                 }
 
-                // flag marker 存在但读取失败，继续尝试重新解读
-                OnLog?.Invoke("读取已有地图数据失败，尝试重新解读...");
-            }
+                // 关闭可能阻挡解读的 UI 窗口（交易板等）
+                CloseBlockingWindows();
+                await Task.Delay(500, token);
 
-            // 查找未解读的藏宝图
-            if (!FindMapInInventory(out _, out _))
-            {
-                return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
-            }
+                // 下坐骑（骑乘坐骑时无法使用解读技能）
+                DismountIfMounted();
+                await Task.Delay(500, token);
 
-            // 关闭可能阻挡解读的 UI 窗口（交易板等）
-            CloseBlockingWindows();
-            await Task.Delay(500, token);
+                // 使用解读技能
+                if (!ExecuteDecipher())
+                {
+                    return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
+                }
 
-            // 下坐骑（骑乘坐骑时无法使用解读技能）
-            DismountIfMounted();
-            await Task.Delay(500, token);
+                // 等待游戏响应（游戏需要时间弹出解读对话框）
+                await Task.Delay(500, token);
 
-            // 使用解读技能
-            if (!ExecuteDecipher())
-            {
-                return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
-            }
+                // 等待解读对话框并自动确认（选择地图 → 确认解读）
+                await HandleDecipherDialog(token);
 
-            // 等待游戏响应（游戏需要时间弹出解读对话框）
-            await Task.Delay(500, token);
+                // 等待旗帜标记出现
+                if (!await WaitForFlagMarker(token))
+                {
+                    return new DecipherResult { Success = false, ErrorMessage = "解读后未检测到地图标记" };
+                }
 
-            // 等待解读对话框并自动确认（选择地图 → 确认解读）
-            await HandleDecipherDialog(token);
-
-            // 等待旗帜标记出现（解读后游戏会在 AgentMap 上放置一个 flag marker）
-            if (!await WaitForFlagMarker(token))
-            {
-                return new DecipherResult { Success = false, ErrorMessage = "解读后未检测到地图标记" };
+                // 解读后再使用一次道具，确保 flag marker 数据是最新的
+                OnLog?.Invoke("使用已解读的道具刷新旗帜标记...");
+                await UseDecipheredMapItem(token);
             }
 
             // 读取解读后的地图信息
@@ -201,6 +188,74 @@ public class MapDecipherService : IDisposable
             _cts?.Dispose();
             _cts = null;
         }
+    }
+
+    /// <summary>
+    /// 使用已解读的藏宝图道具，刷新 AgentMap 上的旗帜标记。
+    /// 解读后道具变成"卡冈图亚革制的宝物地图"，使用它会打开地图并放置正确的旗帜标记。
+    /// </summary>
+    private async Task UseDecipheredMapItem(CancellationToken token)
+    {
+        try
+        {
+            // 先关闭可能存在的地图窗口
+            CloseMapAddon();
+            await Task.Delay(300, token);
+
+            // 使用藏宝图道具 (ActionType.Item)
+            var itemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
+            var result = UseItemAction(itemId);
+            OnLog?.Invoke($"使用藏宝图道具 (ItemID={itemId}): {result}");
+
+            // 等待地图窗口打开和旗帜标记刷新
+            await Task.Delay(2000, token);
+
+            // 等待 flag marker 出现/刷新
+            var refreshStart = DateTime.Now;
+            while ((DateTime.Now - refreshStart).TotalMilliseconds < 5000)
+            {
+                token.ThrowIfCancellationRequested();
+
+                if (TryGetFlagMarkerSafe(out var flag))
+                {
+                    OnLog?.Invoke($"旗帜标记已刷新: 领土={flag.TerritoryId} 地图={flag.MapId} 世界X={flag.XFloat:F1} 世界Z={flag.YFloat:F1}");
+                    break;
+                }
+
+                await Task.Delay(200, token);
+            }
+
+            // 关闭地图窗口（导航时不需要挡住屏幕）
+            CloseMapAddon();
+            await Task.Delay(300, token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"使用道具失败: {ex.Message}");
+        }
+    }
+
+    private unsafe void CloseMapAddon()
+    {
+        var mapAddon = Plugin.GameGui.GetAddonByName("Map");
+        if (mapAddon.Address != IntPtr.Zero)
+        {
+            var atk = (AtkUnitBase*)mapAddon.Address;
+            atk->FireCallback(unchecked((uint)-1), null, true);
+        }
+    }
+
+    private unsafe bool UseItemAction(uint itemId)
+    {
+        var actionManager = ActionManager.Instance();
+        if (actionManager == null) return false;
+        return actionManager->UseAction(ActionType.Item, itemId);
+    }
+
+    private bool TryGetFlagMarkerSafe(out FlagMapMarker flag)
+    {
+        unsafe { return TryGetFlagMarker(out flag, out _); }
     }
 
     /// <summary>

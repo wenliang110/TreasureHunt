@@ -6,12 +6,12 @@
     "Punchline": "FF14 自动挖宝插件 - 藏宝图全流程自动化",
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
-    "Changelog": "v0.3.4.0 - 解读后等待6秒+同区域距离超500m也传送\n1. 解读成功后等待6秒再执行后续操作，确保游戏完成地图标记渲染和数据写入\n2. 修复同区域距离超500m不传送的问题：之前GuessTargetTerritory总是返回当前领土，导致同区域内754m也不传送直接导航卡住\n3. 现在同区域距离超500m也会传送到最近水晶再导航",
-    "AssemblyVersion": "0.3.4.0",
+    "Changelog": "v0.3.6.0 - 修复道具ID和同区域传送\n1. 使用正确的已解读道具ID 2003785（之前用的46185是未解读的）\n2. 同区域距离超过100m也传送到最近水晶（之前阈值500m导致277m不传送）\n3. FindMapInInventory同时搜索未解读(46185)和已解读(2003785)道具",
+    "AssemblyVersion": "0.3.6.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.4.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.4.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.6.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.6.0/TreasureHunt.zip",
     "DownloadCount": 0,
     "LastUpdate": "1788955200"
   }

@@ -98,10 +98,10 @@ public class NavigationService : IDisposable
                         await Task.Delay(1500, token);
                     }
                 }
-                else if (distance > 500.0f)
+                else if (distance > 100.0f)
                 {
-                    // 同区域但距离超过 500m，传送到最近水晶再导航
-                    OnLog?.Invoke($"同区域但距离 {distance:F1}m 过远，传送到最近水晶...");
+                    // 同区域但距离超过 100m，传送到最近水晶再导航
+                    OnLog?.Invoke($"同区域距离 {distance:F1}m，传送到最近水晶...");
                     if (!await TeleportToNearestAetheryte(destination, currentTerritory, token))
                     {
                         OnLog?.Invoke("同区域传送失败，尝试直接导航");
