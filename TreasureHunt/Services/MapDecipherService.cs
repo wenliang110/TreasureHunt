@@ -45,17 +45,19 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 在背包中查找 Gargantuaskin 藏宝图
+    /// 输出参数 foundItemId 返回找到的道具实际 ID（46185=未解读, 2003785=已解读）
     /// </summary>
-    public unsafe bool FindMapInInventory(out InventoryItem item, out int slot)
+    public unsafe bool FindMapInInventory(out InventoryItem item, out int slot, out uint foundItemId)
     {
         item = default;
         slot = -1;
+        foundItemId = 0;
 
         var invManager = InventoryManager.Instance();
         if (invManager == null) return false;
 
-        var itemId = TreasureMapConstants.GargantuaskinItemId;
-        var decipheredItemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
+        var itemId = TreasureMapConstants.GargantuaskinItemId;          // 46185
+        var decipheredItemId = TreasureMapConstants.GargantuaskinDecipheredItemId;  // 2003785
 
         var inventoryTypes = new[]
         {
@@ -79,7 +81,9 @@ public class MapDecipherService : IDisposable
                 {
                     item = *invItem;
                     slot = i;
-                    OnLog?.Invoke($"在{label}槽位 {i} 找到藏宝图");
+                    foundItemId = invItem->ItemId;
+                    var typeDesc = invItem->ItemId == decipheredItemId ? "已解读" : "未解读";
+                    OnLog?.Invoke($"在{label}槽位 {i} 找到藏宝图 ({typeDesc}, ID={invItem->ItemId})");
                     return true;
                 }
             }
@@ -90,9 +94,19 @@ public class MapDecipherService : IDisposable
     }
 
     /// <summary>
+    /// 兼容旧接口
+    /// </summary>
+    public bool FindMapInInventory(out InventoryItem item, out int slot)
+    {
+        return FindMapInInventory(out item, out slot, out _);
+    }
+
+    /// <summary>
     /// 解读藏宝图
-    /// 正确流程: 解读(GeneralAction 19) → 背包出现已解读道具(2003785) → 使用该道具打开地图并放置旗帜标记 → 读取旗帜坐标
-    /// 关键修复：旗帜标记不会在解读后自动出现，必须先使用已解读的道具才会出现
+    /// 正确流程（参考用户说明）：
+    /// 1. 如果道具已是 2003785（已解读）→ 直接使用道具打开地图获取旗帜标记
+    /// 2. 如果道具是 46185（未解读）→ 使用道具(ActionType.Item) → 弹出确认对话框 → 确认 → 道具变为 2003785 → 使用 2003785 获取旗帜标记
+    /// 关键：解读 = 使用道具 + 确认对话框，不是 GeneralAction 19
     /// </summary>
     public async Task<DecipherResult> DecipherMapAsync()
     {
@@ -101,48 +115,48 @@ public class MapDecipherService : IDisposable
 
         try
         {
-            // 策略1: 检查是否已有旗帜标记（之前已解读并使用过道具）
+            // 查找背包中的藏宝图，获取实际 ItemId
+            if (!FindMapInInventory(out _, out _, out var foundItemId))
+            {
+                return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
+            }
+
+            // 策略1: 已有旗帜标记（之前已使用过道具）
             if (HasDecipheredMap())
             {
                 OnLog?.Invoke("检测到已有地图标记，使用道具刷新坐标...");
                 await UseDecipheredMapItem(token);
             }
-            // 策略2: 检查背包是否已有已解读的道具(2003785)但尚未使用
-            else if (FindDecipheredMapInInventory())
+            // 策略2: 找到的是已解读道具 (2003785)，直接使用
+            else if (foundItemId == TreasureMapConstants.GargantuaskinDecipheredItemId)
             {
-                OnLog?.Invoke("背包中找到已解读的藏宝图(2003785)，使用道具获取坐标...");
+                OnLog?.Invoke($"背包中找到已解读的藏宝图(ID={foundItemId})，直接使用获取坐标...");
                 await UseDecipheredMapItem(token);
             }
-            // 策略3: 需要先解读未解读的藏宝图(46185)
+            // 策略3: 找到的是未解读道具 (46185)，需要先解读
             else
             {
-                // 查找未解读的藏宝图
-                if (!FindMapInInventory(out _, out _))
-                {
-                    return new DecipherResult { Success = false, ErrorMessage = "背包中未找到藏宝图" };
-                }
+                OnLog?.Invoke($"背包中找到未解读的藏宝图(ID={foundItemId})，开始解读...");
 
-                // 关闭可能阻挡解读的 UI 窗口（交易板等）
+                // 关闭可能阻挡的 UI 窗口
                 CloseBlockingWindows();
                 await Task.Delay(500, token);
 
-                // 下坐骑（骑乘坐骑时无法使用解读技能）
+                // 下坐骑
                 DismountIfMounted();
                 await Task.Delay(500, token);
 
-                // 使用解读技能
-                if (!ExecuteDecipher())
-                {
-                    return new DecipherResult { Success = false, ErrorMessage = "执行解读失败" };
-                }
+                // 方法1: 使用道具 (ActionType.Item with 46185) - 这会触发解读对话框
+                OnLog?.Invoke("使用藏宝图道具触发解读...");
+                var useResult = UseItemAction(TreasureMapConstants.GargantuaskinItemId);
+                OnLog?.Invoke($"使用未解读道具 (ItemID={TreasureMapConstants.GargantuaskinItemId}): {useResult}");
 
-                // 等待游戏响应（游戏需要时间弹出解读对话框）
                 await Task.Delay(500, token);
 
-                // 等待解读对话框并自动确认（选择地图 → 确认解读）
+                // 等待对话框出现并处理
                 await HandleDecipherDialog(token);
 
-                // 等待解读完成，已解读道具(2003785)出现在背包中
+                // 等待解读完成，检测已解读道具(2003785)出现在背包中
                 OnLog?.Invoke("等待解读完成，检测已解读道具...");
                 var decipherWaitStart = DateTime.Now;
                 var decipherComplete = false;
@@ -160,16 +174,38 @@ public class MapDecipherService : IDisposable
 
                 if (!decipherComplete)
                 {
-                    OnLog?.Invoke("警告: 未检测到已解读道具，尝试直接使用道具...");
+                    // 方法2: 回退到 GeneralAction 19
+                    OnLog?.Invoke("使用道具未触发解读，尝试 GeneralAction 19...");
+                    ExecuteDecipher();
+                    await Task.Delay(500, token);
+                    await HandleDecipherDialog(token);
+
+                    // 再次检测
+                    decipherWaitStart = DateTime.Now;
+                    while ((DateTime.Now - decipherWaitStart).TotalSeconds < 10)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (FindDecipheredMapInInventory())
+                        {
+                            decipherComplete = true;
+                            OnLog?.Invoke("检测到已解读道具出现在背包中");
+                            break;
+                        }
+                        await Task.Delay(500, token);
+                    }
                 }
 
-                // 关键步骤：使用已解读的道具打开地图并放置旗帜标记
-                // 旗帜标记只有在使用道具后才会出现，不会在解读后自动出现
+                if (!decipherComplete)
+                {
+                    OnLog?.Invoke("警告: 未检测到已解读道具，尝试直接使用已解读道具...");
+                }
+
+                // 使用已解读的道具获取旗帜标记
                 OnLog?.Invoke("使用已解读的道具获取旗帜标记...");
                 await UseDecipheredMapItem(token);
             }
 
-            // 等待旗帜标记出现（使用道具后应该已经出现）
+            // 等待旗帜标记出现
             if (!await WaitForFlagMarker(token))
             {
                 return new DecipherResult { Success = false, ErrorMessage = "未检测到地图标记（使用道具后仍未出现旗帜标记）" };
@@ -261,7 +297,8 @@ public class MapDecipherService : IDisposable
 
     /// <summary>
     /// 使用已解读的藏宝图道具，刷新 AgentMap 上的旗帜标记。
-    /// 解读后道具变成"卡冈图亚革制的宝物地图"，使用它会打开地图并放置正确的旗帜标记。
+    /// 解读后道具变成"卡冈图亚革制的宝物地图"(2003785)，使用它会打开地图并放置旗帜标记。
+    /// 如果背包中没有 2003785，尝试使用 46185（可能解读后 ItemId 未变）。
     /// </summary>
     private async Task UseDecipheredMapItem(CancellationToken token)
     {
@@ -271,17 +308,38 @@ public class MapDecipherService : IDisposable
             CloseMapAddon();
             await Task.Delay(300, token);
 
-            // 使用藏宝图道具 (ActionType.Item)
+            // 检查背包中是否有已解读道具(2003785)
+            var hasDeciphered = FindDecipheredMapInInventory();
             var itemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
+
+            if (!hasDeciphered)
+            {
+                // 检查是否有未解读道具(46185) - 可能解读后 ItemId 没变
+                OnLog?.Invoke("背包中未找到 2003785，检查是否有 46185...");
+                var hasUndeciphered = FindMapInInventory(out _, out _, out var foundId);
+                if (hasUndeciphered)
+                {
+                    // 使用找到的道具 ID（可能是 46185 或 2003785）
+                    itemId = foundId;
+                    OnLog?.Invoke($"使用背包中实际找到的道具 (ID={itemId})");
+                }
+                else
+                {
+                    OnLog?.Invoke("背包中未找到任何藏宝图道具，尝试使用 2003785...");
+                }
+            }
+
+            // 使用道具
+            OnLog?.Invoke($"使用藏宝图道具 (ItemID={itemId})...");
             var result = UseItemAction(itemId);
-            OnLog?.Invoke($"使用藏宝图道具 (ItemID={itemId}): {result}");
+            OnLog?.Invoke($"使用道具结果: {result}");
 
             // 等待地图窗口打开和旗帜标记刷新
-            await Task.Delay(2000, token);
+            await Task.Delay(3000, token);
 
             // 等待 flag marker 出现/刷新
             var refreshStart = DateTime.Now;
-            while ((DateTime.Now - refreshStart).TotalMilliseconds < 5000)
+            while ((DateTime.Now - refreshStart).TotalMilliseconds < 10000)
             {
                 token.ThrowIfCancellationRequested();
 
@@ -291,10 +349,10 @@ public class MapDecipherService : IDisposable
                     break;
                 }
 
-                await Task.Delay(200, token);
+                await Task.Delay(300, token);
             }
 
-            // 关闭地图窗口（导航时不需要挡住屏幕）
+            // 关闭地图窗口
             CloseMapAddon();
             await Task.Delay(300, token);
         }

@@ -28,7 +28,7 @@ public static class TreasureMapConstants
     public const string PortalDungeonNameEN = "Vault Oneiron";
 
     // G18 挖宝地图区域（记忆之野）
-    public const uint GargantuaskinTerritoryId = 1185;
+    public const uint GargantuaskinTerritoryId = 1192;
     public const string GargantuaskinTerritoryName = "记忆之野";
     // 默认传送目标（还没解读地图时，先传送到地图区域的记忆节点）
     public const string DefaultAetheryteNameCN = "记忆节点·记忆";
