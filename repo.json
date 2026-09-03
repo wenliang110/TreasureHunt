@@ -6,13 +6,13 @@
     "Punchline": "FF14 自动挖宝插件 - 藏宝图全流程自动化",
     "Description": "支持陈旧的卡冈图亚革地图 (G18) 自动购买、解读、传送、导航、挖掘、进洞、下一层交互及 TP 钱袋子奖励房自动收集。模块化设计，配合 vnavmesh 导航及其他战斗插件实现全流程自动化。",
     "Tags": ["treasure", "map", "hunt", "auto", "dig", "teleport", "moneybag"],
-    "Changelog": "v0.3.9.0 - 修复传送水晶选择+自动上坐骑+导航优化\n1. 更新G18位置数据库: 填入正确水晶ID(忆213/火214/风215)\n2. 修复传送逻辑: 优先使用matchedLoc.NearestAetheryteId选择最近水晶\n3. 移除NavigationService中重复传送逻辑(由Orchestrator统一管理)\n4. 新增自动上坐骑: 导航距离>50m时自动调用GeneralAction 23上坐骑\n5. 导航前等待vnavmesh就绪(最多5秒), 避免传送后navmesh未加载\n6. 调大unstuck检测阈值: 从3秒/5秒统一调整到8秒",
-    "AssemblyVersion": "0.3.9.0",
+    "Changelog": "v0.4.0.0 - 修复同领土内传送+上坐骑重试机制\n1. 修正位置数据库territoryId 1185to1192(活着的记忆正确领土ID)\n2. 修复同领土内传送: 距离标点>200m时仍传送到离标点最近水晶\n3. 重写上坐骑: GetActionStatus检查+3次重试+unsafe隔离\n4. 修正图3所有8个坐标和对应水晶ID",
+    "AssemblyVersion": "0.4.0.0",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.9.0/TreasureHunt.zip",
-    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.3.9.0/TreasureHunt.zip",
+    "DownloadLinkInstall": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.4.0.0/TreasureHunt.zip",
+    "DownloadLinkUpdate": "https://github.com/wenliang110/TreasureHunt/releases/download/v0.4.0.0/TreasureHunt.zip",
     "DownloadCount": 0,
-    "LastUpdate": "1788500220"
+    "LastUpdate": "1788540360"
   }
 ]
