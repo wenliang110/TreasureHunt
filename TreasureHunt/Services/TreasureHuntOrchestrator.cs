@@ -108,6 +108,7 @@ public class TreasureHuntOrchestrator : IDisposable
 
             // === 步骤3: 传送到宝藏图所在区域 ===
             // 关键：使用道具确认地图后，需要传送到宝藏图所在的领土
+            // 优先使用 matchedLoc 中记录的最近水晶 ID（最准确）
             // 传送后需要等待 10-15 秒让区域完全加载，然后才能导航寻路
             if (_plugin.Configuration.EnableAutoTeleport && mapData?.Location != null)
             {
@@ -136,8 +137,19 @@ public class TreasureHuntOrchestrator : IDisposable
 
                     OnLog?.Invoke($"需要传送: {currentTerritory} → {targetTerritory}");
 
-                    // 查找目标领土的水晶
-                    var aetheryteId = FindAetheryteByTerritory(targetTerritory);
+                    // 优先级1: 从匹配的点位数据中获取最近水晶ID（最准确）
+                    var aetheryteId = matchedLoc?.NearestAetheryteId ?? 0;
+                    if (aetheryteId != 0)
+                    {
+                        OnLog?.Invoke($"使用点位匹配的最近水晶: {matchedLoc?.NearestAetheryteNameCN} (ID={aetheryteId})");
+                    }
+                    else
+                    {
+                        // 优先级2: 按领土ID查找水晶
+                        OnLog?.Invoke("点位数据无水晶ID，按领土查找...");
+                        aetheryteId = FindAetheryteByTerritory(targetTerritory);
+                    }
+
                     if (aetheryteId == 0)
                     {
                         OnLog?.Invoke($"未找到领土 {targetTerritory} 的水晶，回退到 G18 水晶");

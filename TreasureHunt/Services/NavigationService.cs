@@ -52,7 +52,8 @@ public class NavigationService : IDisposable
     }
 
     /// <summary>
-    /// 传送到指定位置最近的水晶，然后使用 vnavmesh 导航到目标点
+    /// 使用 vnavmesh 导航到目标点（自动上坐骑）
+    /// 注意：传送逻辑由 Orchestrator 负责，本方法只处理同区域内的步行/坐骑导航
     /// </summary>
     public async Task<NavigationResult> NavigateToAsync(Vector3 destination, string destinationName = "")
     {
@@ -76,50 +77,28 @@ public class NavigationService : IDisposable
                 return new NavigationResult { Success = true, FinalState = State };
             }
 
-            // 步骤1: 如果启用自动传送且距离较远，传送到最近水晶
-            if (_plugin.Configuration.EnableAutoTeleport && distance > 100.0f)
+            OnLog?.Invoke($"距离目标 {distance:F1}m，开始导航...");
+
+            // 导航前自动上坐骑（如果距离较远且不在坐骑上）
+            if (distance > 50.0f)
             {
-                OnLog?.Invoke($"距离目标 {distance:F1}m，尝试传送...");
-
-                var currentTerritory = Plugin.ClientState.TerritoryType;
-                var targetTerritory = GuessTargetTerritory(destination);
-
-                if (targetTerritory != 0 && targetTerritory != currentTerritory)
-                {
-                    // 跨区域，需要传送
-                    if (!await TeleportToNearestAetheryte(destination, targetTerritory, token))
-                    {
-                        OnLog?.Invoke("传送失败，尝试直接导航");
-                    }
-                    else
-                    {
-                        State = NavigationState.WaitingForLoad;
-                        await WaitForAreaLoad(token);
-                        await Task.Delay(1500, token);
-                    }
-                }
-                else if (distance > 100.0f)
-                {
-                    // 同区域但距离超过 100m，传送到最近水晶再导航
-                    OnLog?.Invoke($"同区域距离 {distance:F1}m，传送到最近水晶...");
-                    if (!await TeleportToNearestAetheryte(destination, currentTerritory, token))
-                    {
-                        OnLog?.Invoke("同区域传送失败，尝试直接导航");
-                    }
-                    else
-                    {
-                        State = NavigationState.WaitingForLoad;
-                        await WaitForAreaLoad(token);
-                        await Task.Delay(1500, token);
-                    }
-                }
-                else
-                {
-                    OnLog?.Invoke("同区域，直接导航");
-                }
+                await EnsureMounted(token);
             }
 
-            // 步骤2: 使用 vnavmesh 导航到具体位置
+            // 等待 vnavmesh 就绪（传送后 navmesh 可能需要时间加载）
+            var vnavWaitStart = DateTime.Now;
+            while (!VnavmeshHelper.IsAvailable() && (DateTime.Now - vnavWaitStart).TotalSeconds < 5)
+            {
+                token.ThrowIfCancellationRequested();
+                await Task.Delay(500, token);
+            }
+
+            if (!VnavmeshHelper.IsAvailable())
+            {
+                OnLog?.Invoke("警告: vnavmesh 不可用，尝试继续导航...");
+            }
+
+            // 使用 vnavmesh 导航到具体位置
             State = NavigationState.Navigating;
             if (!await NavigateWithVnavmesh(destination, token))
                 return new NavigationResult { Success = false, ErrorMessage = "vnavmesh 导航失败" };
@@ -269,6 +248,69 @@ public class NavigationService : IDisposable
     {
         // 默认返回当前领土，表示同区域导航
         return Plugin.ClientState.TerritoryType;
+    }
+
+    /// <summary>
+    /// 确保玩家在坐骑上（导航远距离时自动上坐骑）
+    /// 如果已经在坐骑上或在飞行中则直接返回
+    /// </summary>
+    private async Task EnsureMounted(CancellationToken token)
+    {
+        try
+        {
+            if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted] ||
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InFlight])
+            {
+                return;
+            }
+
+            // 检查是否在战斗中或其他不能上坐骑的状态
+            if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat] ||
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Casting] ||
+                Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas])
+            {
+                OnLog?.Invoke("当前状态无法上坐骑，跳过");
+                return;
+            }
+
+            OnLog?.Invoke("正在上坐骑...");
+
+            unsafe
+            {
+                var actionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance();
+                if (actionManager != null)
+                {
+                    // GeneralAction 23 = Mount/Dismount
+                    var result = actionManager->UseAction(FFXIVClientStructs.FFXIV.Client.Game.ActionType.GeneralAction, 23);
+                    if (!result)
+                    {
+                        OnLog?.Invoke("上坐骑失败，尝试继续步行导航");
+                        return;
+                    }
+                }
+            }
+
+            // 等待上坐骑完成（最多 3 秒）
+            var waitStart = DateTime.Now;
+            while ((DateTime.Now - waitStart).TotalSeconds < 3)
+            {
+                token.ThrowIfCancellationRequested();
+                if (Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Mounted])
+                {
+                    OnLog?.Invoke("已上坐骑");
+                    break;
+                }
+                await Task.Delay(200, token);
+            }
+
+            // 额外等待 0.5 秒让坐骑稳定
+            await Task.Delay(500, token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            OnLog?.Invoke($"上坐骑异常: {ex.Message}");
+        }
     }
 
     /// <summary>

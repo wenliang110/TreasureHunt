@@ -12,9 +12,9 @@ namespace TreasureHunt.Helpers;
 /// </summary>
 public class AdvancedUnstuck : IDisposable
 {
-    private const double UnstuckDuration = 3.0;
+    private const double UnstuckDuration = 8.0;
     private const double CheckExpiration = 1.0;
-    private const float MinMovementDistance = 2.0f;
+    private const float MinMovementDistance = 1.5f;
 
     private Vector3 _lastPosition = Vector3.Zero;
     private DateTime _lastCheckTime = DateTime.MinValue;

@@ -4,7 +4,7 @@
     "mapX": 9.3,
     "mapY": 10.5,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 213,
     "nearestAetheryteName": "Leynode Memoris",
     "nearestAetheryteNameCN": "地场节点·忆"
   },
@@ -13,7 +13,7 @@
     "mapX": 10.3,
     "mapY": 35.9,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 213,
     "nearestAetheryteName": "Leynode Memoris",
     "nearestAetheryteNameCN": "地场节点·忆"
   },
@@ -22,7 +22,7 @@
     "mapX": 18.6,
     "mapY": 15.8,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 215,
     "nearestAetheryteName": "Leynode Wind",
     "nearestAetheryteNameCN": "地场节点·风"
   },
@@ -31,7 +31,7 @@
     "mapX": 20.2,
     "mapY": 23.0,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 215,
     "nearestAetheryteName": "Leynode Wind",
     "nearestAetheryteNameCN": "地场节点·风"
   },
@@ -40,7 +40,7 @@
     "mapX": 25.0,
     "mapY": 6.9,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 215,
     "nearestAetheryteName": "Leynode Wind",
     "nearestAetheryteNameCN": "地场节点·风"
   },
@@ -49,7 +49,7 @@
     "mapX": 31.0,
     "mapY": 18.1,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 214,
     "nearestAetheryteName": "Leynode Fire",
     "nearestAetheryteNameCN": "地场节点·火"
   },
@@ -58,7 +58,7 @@
     "mapX": 38.5,
     "mapY": 28.1,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 214,
     "nearestAetheryteName": "Leynode Fire",
     "nearestAetheryteNameCN": "地场节点·火"
   },
@@ -67,7 +67,7 @@
     "mapX": 35.0,
     "mapY": 35.3,
     "territoryId": 1185,
-    "nearestAetheryteId": 0,
+    "nearestAetheryteId": 213,
     "nearestAetheryteName": "Leynode Memoris",
     "nearestAetheryteNameCN": "地场节点·忆"
   }

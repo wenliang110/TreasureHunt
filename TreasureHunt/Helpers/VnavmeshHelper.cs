@@ -178,11 +178,12 @@ public static class VnavmeshHelper
                     return true;
                 }
 
-                // 防卡死检测：如果5秒没移动超过0.5米，重新寻路
-                if ((DateTime.Now - lastStuckCheck).TotalMilliseconds > 5000)
+                // 防卡死检测：如果8秒没移动超过1米，重新寻路
+                // 注意：刚上坐骑或转弯时可能短时间没移动，所以阈值设长一点
+                if ((DateTime.Now - lastStuckCheck).TotalMilliseconds > 8000)
                 {
                     var moved = Vector3.Distance(lastPosition, player.Position);
-                    if (moved < 0.5f && !IsPathfindInProgress())
+                    if (moved < 1.0f && !IsPathfindInProgress())
                     {
                         Plugin.Log.Warning($"检测到卡死（移动{moved:F1}m），重新寻路...");
                         Stop();
