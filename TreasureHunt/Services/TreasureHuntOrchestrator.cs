@@ -106,55 +106,52 @@ public class TreasureHuntOrchestrator : IDisposable
                 await Task.Delay(1000, token);
             }
 
-            // === 步骤3: 传送到最近晶石（仅当不在挖宝地图时）===
-            if (_plugin.Configuration.EnableAutoTeleport && matchedLoc != null)
+            // === 步骤3: 传送到宝藏图所在区域 ===
+            // 关键：使用道具确认地图后，需要传送到宝藏图所在的领土
+            // 传送后需要等待 10-15 秒让区域完全加载，然后才能导航寻路
+            if (_plugin.Configuration.EnableAutoTeleport && mapData?.Location != null)
             {
                 var currentTerritory = Plugin.ClientState.TerritoryType;
-                // 用名称判断是否在G18地图：查找附近是否有地场节点水晶
-                // （领土ID可能不准确，用名称匹配更可靠）
-                bool isInG18 = false;
-                var unlocked = AetheryteHelper.GetUnlockedAetherytesWithNames();
-                foreach (var a in unlocked)
+                var targetTerritory = mapData.Location.TerritoryId;
+
+                OnLog?.Invoke($"领土检查: 当前={currentTerritory}, 目标={targetTerritory}");
+
+                if (targetTerritory == 0)
                 {
-                    if (a.name.Contains("地场节点", StringComparison.OrdinalIgnoreCase) && 
-                        a.territoryId == currentTerritory)
+                    OnLog?.Invoke("警告: 目标领土 ID 为 0，无法传送，尝试回退到 G18 水晶");
+                    var fallbackId = FindAnyG18Aetheryte();
+                    if (fallbackId != 0)
                     {
-                        isInG18 = true;
-                        break;
+                        await TeleportAndVerifyAsync(fallbackId, TreasureMapConstants.GargantuaskinTerritoryId, token);
                     }
                 }
-
-                if (!isInG18)
+                else if (targetTerritory == currentTerritory)
                 {
-                    _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送...");
-                    PhaseChanged?.Invoke(_state.Phase);
-
-                    // 通过名称匹配找水晶ID（不依赖领土ID）
-                    var aetheryteId = FindG18AetheryteByName(matchedLoc.NearestAetheryteNameCN);
-                    if (aetheryteId != 0)
-                    {
-                        OnLog?.Invoke($"传送到晶石: {matchedLoc.NearestAetheryteNameCN} (ID={aetheryteId})");
-                        var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
-                        if (!teleResult.Success)
-                        {
-                            OnLog?.Invoke($"传送失败: {teleResult.ErrorMessage}");
-                        }
-                    }
-                    else
-                    {
-                        OnLog?.Invoke($"无法找到晶石: {matchedLoc.NearestAetheryteNameCN}");
-                        // 回退：找任意一个地场节点水晶传送
-                        var fallbackId = FindAnyG18Aetheryte();
-                        if (fallbackId != 0)
-                        {
-                            OnLog?.Invoke($"回退传送到任意地场节点 (ID={fallbackId})");
-                            await _plugin.NavigationService.TeleportOnlyAsync(fallbackId);
-                        }
-                    }
+                    OnLog?.Invoke($"已在目标领土 {currentTerritory}，无需传送");
                 }
                 else
                 {
-                    OnLog?.Invoke("已在挖宝地图，直接导航到点位");
+                    _state.SetPhase(TreasureHuntPhase.Teleporting, "正在传送到挖宝区域...");
+                    PhaseChanged?.Invoke(_state.Phase);
+
+                    OnLog?.Invoke($"需要传送: {currentTerritory} → {targetTerritory}");
+
+                    // 查找目标领土的水晶
+                    var aetheryteId = FindAetheryteByTerritory(targetTerritory);
+                    if (aetheryteId == 0)
+                    {
+                        OnLog?.Invoke($"未找到领土 {targetTerritory} 的水晶，回退到 G18 水晶");
+                        aetheryteId = FindAnyG18Aetheryte();
+                    }
+
+                    if (aetheryteId != 0)
+                    {
+                        await TeleportAndVerifyAsync(aetheryteId, targetTerritory, token);
+                    }
+                    else
+                    {
+                        OnLog?.Invoke("错误: 未找到任何可用传送水晶，跳过传送");
+                    }
                 }
             }
 
@@ -317,27 +314,47 @@ public class TreasureHuntOrchestrator : IDisposable
             }
 
             // 传送
-            if (_plugin.Configuration.EnableAutoTeleport && decipherResult.MatchedLocation != null)
+            if (_plugin.Configuration.EnableAutoTeleport)
             {
                 _state.SetPhase(TreasureHuntPhase.Teleporting, "一键买图: 传送中...");
                 PhaseChanged?.Invoke(_state.Phase);
 
-                var aetheryteId = FindG18AetheryteByName(decipherResult.MatchedLocation.NearestAetheryteNameCN);
-                if (aetheryteId != 0)
+                var targetTerritory = decipherResult.MapData?.Location?.TerritoryId ?? 0;
+                var currentTerritory = Plugin.ClientState.TerritoryType;
+
+                OnLog?.Invoke($"领土检查: 当前={currentTerritory}, 目标={targetTerritory}");
+
+                if (targetTerritory != 0 && targetTerritory != currentTerritory)
                 {
-                    OnLog?.Invoke($"传送到晶石: {decipherResult.MatchedLocation.NearestAetheryteNameCN} (ID={aetheryteId})");
-                    await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+                    // 按领土 ID 查找水晶
+                    var aetheryteId = FindAetheryteByTerritory(targetTerritory);
+                    if (aetheryteId == 0 && decipherResult.MatchedLocation != null)
+                    {
+                        // 回退：按名称查找
+                        aetheryteId = FindG18AetheryteByName(decipherResult.MatchedLocation.NearestAetheryteNameCN);
+                    }
+                    if (aetheryteId == 0)
+                    {
+                        // 再回退：找任意 G18 水晶
+                        aetheryteId = FindAnyG18Aetheryte();
+                    }
+
+                    if (aetheryteId != 0)
+                    {
+                        await TeleportAndVerifyAsync(aetheryteId, targetTerritory, token);
+                    }
+                    else
+                    {
+                        OnLog?.Invoke("错误: 未找到可用传送水晶");
+                    }
+                }
+                else if (targetTerritory == currentTerritory)
+                {
+                    OnLog?.Invoke($"已在目标领土 {currentTerritory}，无需传送");
                 }
                 else
                 {
-                    OnLog?.Invoke($"无法找到晶石: {decipherResult.MatchedLocation.NearestAetheryteNameCN}");
-                    // 回退：找任意一个地场节点
-                    var fallbackId = FindAnyG18Aetheryte();
-                    if (fallbackId != 0)
-                    {
-                        OnLog?.Invoke($"回退传送到任意地场节点 (ID={fallbackId})");
-                        await _plugin.NavigationService.TeleportOnlyAsync(fallbackId);
-                    }
+                    OnLog?.Invoke("目标领土 ID 为 0，无法传送");
                 }
             }
 
@@ -386,6 +403,111 @@ public class TreasureHuntOrchestrator : IDisposable
             Plugin.Log.Error($"查找G18水晶失败: {ex.Message}");
         }
         return 0;
+    }
+
+    /// <summary>
+    /// 通过领土 ID 查找已解锁的传送水晶
+    /// 优先从已解锁列表中匹配同领土的水晶，回退到 Excel 表查找
+    /// </summary>
+    private uint FindAetheryteByTerritory(uint territoryId)
+    {
+        try
+        {
+            // 策略1: 从已解锁水晶列表中查找同领土的（最可靠）
+            var unlocked = AetheryteHelper.GetUnlockedAetherytes();
+            foreach (var (id, terrId, _) in unlocked)
+            {
+                if (terrId == territoryId)
+                {
+                    OnLog?.Invoke($"找到领土 {territoryId} 的水晶: ID={id}");
+                    return id;
+                }
+            }
+
+            // 策略2: 从 Aetheryte Excel 表中搜索同领土的已解锁水晶
+            var aetheryteSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Aetheryte>();
+            if (aetheryteSheet != null)
+            {
+                foreach (var row in aetheryteSheet)
+                {
+                    if (!row.IsAetheryte) continue;
+                    try
+                    {
+                        if (row.Territory.Value.RowId == territoryId)
+                        {
+                            if (AetheryteHelper.IsAetheryteUnlocked(row.RowId))
+                            {
+                                OnLog?.Invoke($"从Excel表找到领土 {territoryId} 的水晶: ID={row.RowId}");
+                                return row.RowId;
+                            }
+                        }
+                    }
+                    catch { continue; }
+                }
+            }
+
+            OnLog?.Invoke($"未找到领土 {territoryId} 的水晶");
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"查找领土 {territoryId} 的水晶失败: {ex.Message}");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 传送到指定水晶并验证领土切换完成。
+    /// 流程: 传送 → 等待领土切换(最多30秒) → 额外等待12秒确保区域完全加载 → 验证
+    /// </summary>
+    private async Task TeleportAndVerifyAsync(uint aetheryteId, uint expectedTerritory, CancellationToken token)
+    {
+        var aetheryteName = AetheryteHelper.GetAetheryteName(aetheryteId);
+        OnLog?.Invoke($"传送到水晶: {aetheryteName} (ID={aetheryteId})");
+
+        var teleResult = await _plugin.NavigationService.TeleportOnlyAsync(aetheryteId);
+        if (!teleResult.Success)
+        {
+            OnLog?.Invoke($"传送指令失败: {teleResult.ErrorMessage}");
+            return;
+        }
+
+        // 等待领土切换完成（最多 30 秒轮询）
+        OnLog?.Invoke("等待领土切换...");
+        var waitStart = DateTime.Now;
+        var territoryChanged = false;
+        while ((DateTime.Now - waitStart).TotalSeconds < 30)
+        {
+            token.ThrowIfCancellationRequested();
+            var nowTerritory = Plugin.ClientState.TerritoryType;
+            if (nowTerritory == expectedTerritory)
+            {
+                territoryChanged = true;
+                OnLog?.Invoke($"已到达目标领土 {expectedTerritory}");
+                break;
+            }
+            await Task.Delay(500, token);
+        }
+
+        if (!territoryChanged)
+        {
+            OnLog?.Invoke($"警告: 30秒内未检测到领土切换 (当前={Plugin.ClientState.TerritoryType}, 期望={expectedTerritory})");
+        }
+
+        // 额外等待 12 秒确保区域完全加载（导航网格、游戏对象等）
+        OnLog?.Invoke("等待区域完全加载 (12秒)...");
+        for (var i = 12; i > 0; i--)
+        {
+            OnLog?.Invoke($"加载等待 {i} 秒...");
+            await Task.Delay(1000, token);
+        }
+
+        // 最终验证
+        var finalTerritory = Plugin.ClientState.TerritoryType;
+        OnLog?.Invoke($"领土验证: 当前={finalTerritory}, 目标={expectedTerritory}, 匹配={finalTerritory == expectedTerritory}");
+        if (finalTerritory != expectedTerritory)
+        {
+            OnLog?.Invoke($"警告: 未到达目标领土！当前={finalTerritory}, 目标={expectedTerritory}");
+        }
     }
 
     /// <summary>
