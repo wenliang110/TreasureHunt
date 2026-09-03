@@ -55,6 +55,7 @@ public class MapDecipherService : IDisposable
         if (invManager == null) return false;
 
         var itemId = TreasureMapConstants.GargantuaskinItemId;
+        var decipheredItemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
 
         var inventoryTypes = new[]
         {
@@ -74,7 +75,7 @@ public class MapDecipherService : IDisposable
             for (var i = 0; i < container->Size; i++)
             {
                 var invItem = container->GetInventorySlot(i);
-                if (invItem->ItemId == itemId)
+                if (invItem->ItemId == itemId || invItem->ItemId == decipheredItemId)
                 {
                     item = *invItem;
                     slot = i;
@@ -202,7 +203,7 @@ public class MapDecipherService : IDisposable
             await Task.Delay(300, token);
 
             // 使用藏宝图道具 (ActionType.Item)
-            var itemId = TreasureMapConstants.GargantuaskinItemId;
+            var itemId = TreasureMapConstants.GargantuaskinDecipheredItemId;
             var result = UseItemAction(itemId);
             OnLog?.Invoke($"使用藏宝图道具 (ItemID={itemId}): {result}");
 
